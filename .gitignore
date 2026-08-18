@@ -1,0 +1,6 @@
+/build/
+/_skbuild/
+/dist/
+/*.egg-info/
+__pycache__/
+*.py[cod]

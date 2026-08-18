@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.10",
+    "nanobind>=2.0",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "vc-delta3d"
+version = "0.1.0"
+description = "Fast compression for three-dimensional uint8 and uint16 scalar fields"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "numcodecs>=0.15.1",
+]
+license = { file = "LICENSE" }
+
+[project.entry-points."numcodecs.codecs"]
+vc-delta3d = "vc_delta3d.numcodecs:Delta3D"
+vcz1 = "vc_delta3d.numcodecs:Vcz1"
+
+[tool.scikit-build]
+cmake.version = ">=3.22"
+wheel.packages = ["python/vc_delta3d"]
+
+[tool.scikit-build.cmake.define]
+VC_DELTA3D_BUILD_PYTHON = "ON"
+VC_DELTA3D_BUILD_TESTS = "OFF"
+VC_DELTA3D_INSTALL_CPP = "OFF"
