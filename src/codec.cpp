@@ -6,9 +6,6 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
-#include <string>
-
-#include <zstd.h>
 
 #if defined(_MSC_VER)
 #include <intrin.h>   // __umulh / _udiv128 for the 128-bit rANS reciprocal math
@@ -425,50 +422,24 @@ bool hasHeader(std::span<const std::byte> input,
            static_cast<unsigned char>(input[4]) == kFormatVersion;
 }
 
-// Header byte 7: bits 0-3 codec id; bit 7 set means bits 4-6 carry the
+// Header byte 7: bits 0-3 carry the rANS marker; bit 7 set means bits 4-6
+// carry the
 // delta-axis mask. Payloads from before per-chunk selection have bits 4-7
 // clear and imply full zyx; a clear flag with nonzero mask bits is invalid.
-struct CodecByte {
-    EntropyCodec codec;
+struct HeaderByte {
     unsigned mask;
     bool hasMask;
 };
 
-std::optional<CodecByte> parseCodecByte(unsigned char b)
+std::optional<HeaderByte> parseHeaderByte(unsigned char b)
 {
     const bool hasMask = (b & 0x80) != 0;
-    if (!hasMask && (b & 0x70) != 0)
+    if ((b & 0x0F) != 1 || (!hasMask && (b & 0x70) != 0))
         return std::nullopt;
-    CodecByte out;
+    HeaderByte out;
     out.hasMask = hasMask;
     out.mask = hasMask ? (b >> 4) & 7u : kDeltaMaskZyx;
-    switch (b & 0x0F) {
-    case static_cast<unsigned char>(EntropyCodec::Zstd):
-        out.codec = EntropyCodec::Zstd;
-        return out;
-    case static_cast<unsigned char>(EntropyCodec::Rans):
-        out.codec = EntropyCodec::Rans;
-        return out;
-    default:
-        return std::nullopt;
-    }
-}
-
-std::vector<std::byte> zstdCompressFrame(std::span<const std::byte> input,
-                                         int level,
-                                         std::size_t headerReserve)
-{
-    const std::size_t bound = ZSTD_compressBound(input.size());
-    std::vector<std::byte> output(headerReserve + bound);
-    const std::size_t rc = ZSTD_compress(
-        output.data() + headerReserve, bound, input.data(), input.size(), level);
-    if (ZSTD_isError(rc)) {
-        throw std::runtime_error(
-            std::string("compress: ZSTD_compress failed: ") +
-            ZSTD_getErrorName(rc));
-    }
-    output.resize(headerReserve + rc);
-    return output;
+    return out;
 }
 
 } // namespace
@@ -476,9 +447,7 @@ std::vector<std::byte> zstdCompressFrame(std::span<const std::byte> input,
 std::vector<std::byte> compress(std::span<const std::byte> input,
                                 std::array<int, 3> shapeZYX,
                                 std::size_t elemSize,
-                                int level,
-                                int quantBinWidth,
-                                EntropyCodec codec)
+                                int quantBinWidth)
 {
     const bool shapeValid =
         (elemSize == 1 || elemSize == 2) &&
@@ -503,13 +472,11 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     std::vector<std::byte> filtered(input.begin(), input.end());
     quantize({filtered.data(), filtered.size()}, elemSize, quantBinWidth);
 
-    // Per-chunk filter selection is limited to rANS uint8 payloads; the
-    // uint16 probe isn't implemented (16-bit volumes are rare in the
+    // The uint16 probe isn't implemented (16-bit volumes are rare in the
     // streaming path). Degenerate dims skip the probe; the extra passes are
     // no-ops there anyway.
     unsigned mask = kDeltaMaskZyx;
-    if (codec == EntropyCodec::Rans && elemSize == 1 && z >= 2 && y >= 2 &&
-        x >= 2)
+    if (elemSize == 1 && z >= 2 && y >= 2 && x >= 2)
         mask = selectDeltaMask(
             reinterpret_cast<const std::uint8_t*>(filtered.data()), z, y, x);
     if (elemSize == 1)
@@ -521,17 +488,12 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
 
     const std::span<const std::byte> filteredSpan(filtered.data(),
                                                   filtered.size());
-    auto output = codec == EntropyCodec::Rans
-        ? ransCompressFrame(filteredSpan, kHeaderSize)
-        : zstdCompressFrame(filteredSpan, level, kHeaderSize);
+    auto output = ransCompressFrame(filteredSpan, kHeaderSize);
     std::copy(kWireMagic.begin(), kWireMagic.end(), output.begin());
     output[4] = static_cast<std::byte>(kFormatVersion);
     output[5] = static_cast<std::byte>(elemSize);
     output[6] = static_cast<std::byte>(quantBinWidth);
-    output[7] = codec == EntropyCodec::Rans
-        ? static_cast<std::byte>(0x80u | (mask << 4) |
-                                 static_cast<unsigned>(codec))
-        : static_cast<std::byte>(codec);
+    output[7] = static_cast<std::byte>(0x80u | (mask << 4) | 1u);
     writeU32(output.data() + 8, static_cast<std::uint32_t>(z));
     writeU32(output.data() + 12, static_cast<std::uint32_t>(y));
     writeU32(output.data() + 16, static_cast<std::uint32_t>(x));
@@ -559,21 +521,11 @@ std::optional<int> quantization(std::span<const std::byte> input)
     return std::max(1, static_cast<int>(input[6]));
 }
 
-std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input)
-{
-    if (!hasHeader(input, kWireMagic))
-        return std::nullopt;
-    const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
-    if (!parsed)
-        return std::nullopt;
-    return parsed->codec;
-}
-
 std::optional<int> deltaMask(std::span<const std::byte> input)
 {
     if (!hasHeader(input, kWireMagic))
         return std::nullopt;
-    const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
+    const auto parsed = parseHeaderByte(static_cast<unsigned char>(input[7]));
     if (!parsed || !parsed->hasMask)
         return std::nullopt;
     return static_cast<int>(parsed->mask);
@@ -599,21 +551,13 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
     if ((elemSize != 1 && elemSize != 2) || z == 0 || y == 0 || x == 0 ||
         z * y * x * elemSize != output.size())
         return false;
-    const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
+    const auto parsed = parseHeaderByte(static_cast<unsigned char>(input[7]));
     if (!parsed)
         return false;
 
-    if (parsed->codec == EntropyCodec::Rans) {
-        if (!ransDecompressFrame(input.subspan(kHeaderSize), output.data(),
-                                 output.size()))
-            return false;
-    } else {
-        const std::size_t rc = ZSTD_decompress(
-            output.data(), output.size(),
-            input.data() + kHeaderSize, input.size() - kHeaderSize);
-        if (ZSTD_isError(rc) || rc != output.size())
-            return false;
-    }
+    if (!ransDecompressFrame(input.subspan(kHeaderSize), output.data(),
+                             output.size()))
+        return false;
 
     if (elemSize == 1)
         deltaUnfilter(reinterpret_cast<std::uint8_t*>(output.data()), z, y, x,

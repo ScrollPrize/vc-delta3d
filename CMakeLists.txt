@@ -9,21 +9,6 @@ option(VC_DELTA3D_BUILD_PYTHON "Build the Python extension" OFF)
 option(VC_DELTA3D_BUILD_TESTS "Build the C++ codec tests" ${PROJECT_IS_TOP_LEVEL})
 option(VC_DELTA3D_INSTALL_CPP "Install the C++ library and CMake package" ON)
 
-if(NOT TARGET zstd::libzstd)
-    find_package(zstd CONFIG QUIET)
-    if(TARGET zstd::libzstd_shared)
-        add_library(zstd::libzstd ALIAS zstd::libzstd_shared)
-    elseif(TARGET zstd::libzstd_static)
-        add_library(zstd::libzstd ALIAS zstd::libzstd_static)
-    endif()
-endif()
-
-if(NOT TARGET zstd::libzstd)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(VC_DELTA3D_ZSTD REQUIRED IMPORTED_TARGET libzstd)
-    add_library(zstd::libzstd ALIAS PkgConfig::VC_DELTA3D_ZSTD)
-endif()
-
 add_library(vc_delta3d STATIC src/codec.cpp)
 add_library(vc_delta3d::vc_delta3d ALIAS vc_delta3d)
 set_target_properties(vc_delta3d PROPERTIES
@@ -36,11 +21,6 @@ target_include_directories(vc_delta3d
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_link_libraries(vc_delta3d PUBLIC
-    $<BUILD_INTERFACE:zstd::libzstd>
-    $<INSTALL_INTERFACE:zstd::libzstd>
-)
-
 if(VC_DELTA3D_BUILD_PYTHON)
     find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
     execute_process(

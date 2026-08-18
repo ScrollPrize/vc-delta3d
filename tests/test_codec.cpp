@@ -1,4 +1,4 @@
-// VC-Delta3D codec coverage: D3D1 delta-zyx+zstd roundtrips and
+// VC-Delta3D codec coverage: D3D1 delta-zyx+rANS roundtrips and
 // corrupt/mismatched payload handling.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -15,8 +15,6 @@
 #include <span>
 #include <stdexcept>
 #include <vector>
-
-#include <zstd.h>
 
 namespace {
 
@@ -78,26 +76,6 @@ TEST_CASE("D3D1 roundtrip uint16")
     CHECK(*decoded == input);
 }
 
-TEST_CASE("D3D1 zstd fixture remains decodable")
-{
-    // Version-1 payload for uint8 values [0, 1, ..., 7] with shape 2x2x2.
-    // Keep this fixed fixture independent of the encoder so wire-format
-    // compatibility cannot accidentally regress with a matching code change.
-    constexpr unsigned char encodedBytes[] = {
-        0x44, 0x33, 0x44, 0x31, 0x01, 0x01, 0x01, 0x00,
-        0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
-        0x02, 0x00, 0x00, 0x00, 0x28, 0xb5, 0x2f, 0xfd,
-        0x20, 0x08, 0x41, 0x00, 0x00, 0x00, 0x01, 0x02,
-        0x00, 0x04, 0x00, 0x00, 0x00,
-    };
-    const auto encoded = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(encodedBytes), sizeof(encodedBytes));
-    const auto decoded = vc_delta3d::decompress(encoded, 8);
-    REQUIRE(decoded.has_value());
-    for (std::size_t i = 0; i < decoded->size(); ++i)
-        CHECK((*decoded)[i] == static_cast<std::byte>(i));
-}
-
 TEST_CASE("D3D1 roundtrip single-voxel and flat shapes")
 {
     for (const auto shape : {std::array<int, 3>{1, 1, 1},
@@ -112,19 +90,6 @@ TEST_CASE("D3D1 roundtrip single-voxel and flat shapes")
     }
 }
 
-TEST_CASE("Filter reduces compressed size on correlated data")
-{
-    const std::array<int, 3> shape{32, 32, 32};
-    const auto input = smoothVolume(shape, 1);
-    const auto filtered = vc_delta3d::compress(asSpan(input), shape, 1);
-
-    std::vector<std::byte> unfiltered(ZSTD_compressBound(input.size()));
-    const auto rc = ZSTD_compress(
-        unfiltered.data(), unfiltered.size(), input.data(), input.size(), 3);
-    REQUIRE_FALSE(ZSTD_isError(rc));
-    CHECK(filtered.size() < rc);
-}
-
 TEST_CASE("Mismatched shape or element size throws")
 {
     const std::array<int, 3> shape{4, 4, 4};
@@ -137,18 +102,6 @@ TEST_CASE("Mismatched shape or element size throws")
                     std::invalid_argument);
 }
 
-TEST_CASE("Plain zstd frames without a D3D1 header are rejected")
-{
-    const std::array<int, 3> shape{4, 4, 4};
-    const auto input = smoothVolume(shape, 1);
-    std::vector<std::byte> frame(ZSTD_compressBound(input.size()));
-    const auto rc = ZSTD_compress(
-        frame.data(), frame.size(), input.data(), input.size(), 3);
-    REQUIRE_FALSE(ZSTD_isError(rc));
-    frame.resize(rc);
-    CHECK_FALSE(vc_delta3d::decompress(asSpan(frame), input.size()).has_value());
-}
-
 TEST_CASE("Near-lossless quantization bounds the per-voxel error")
 {
     const std::array<int, 3> shape{8, 6, 10};
@@ -156,8 +109,7 @@ TEST_CASE("Near-lossless quantization bounds the per-voxel error")
         const auto input = smoothVolume(shape, elemSize);
         for (const int width : {vc_delta3d::kQuantizationMaxError1, vc_delta3d::kQuantizationMaxError2}) {
             const auto compressed =
-                vc_delta3d::compress(asSpan(input), shape, elemSize,
-                                  vc_delta3d::kDefaultZstdLevel, width);
+                vc_delta3d::compress(asSpan(input), shape, elemSize, width);
             CHECK(vc_delta3d::quantization(asSpan(compressed)) == width);
 
             const auto decoded = vc_delta3d::decompress(asSpan(compressed), input.size());
@@ -175,8 +127,7 @@ TEST_CASE("Near-lossless quantization bounds the per-voxel error")
             // Idempotent: re-encoding the quantized voxels at the same
             // width must reproduce them exactly.
             const auto again =
-                vc_delta3d::compress(asSpan(*decoded), shape, elemSize,
-                                  vc_delta3d::kDefaultZstdLevel, width);
+                vc_delta3d::compress(asSpan(*decoded), shape, elemSize, width);
             const auto decodedAgain = vc_delta3d::decompress(asSpan(again), input.size());
             REQUIRE(decodedAgain.has_value());
             CHECK(*decodedAgain == *decoded);
@@ -202,49 +153,28 @@ TEST_CASE("Quantization width is reported for all payload generations")
     CHECK_FALSE(vc_delta3d::quantization(asSpan(garbage)).has_value());
 
     CHECK_THROWS_AS(
-        vc_delta3d::compress(asSpan(input), shape, 1, vc_delta3d::kDefaultZstdLevel, 0),
+        vc_delta3d::compress(asSpan(input), shape, 1, 0),
         std::invalid_argument);
     CHECK_THROWS_AS(
-        vc_delta3d::compress(asSpan(input), shape, 1, vc_delta3d::kDefaultZstdLevel, 256),
+        vc_delta3d::compress(asSpan(input), shape, 1, 256),
         std::invalid_argument);
 }
 
-TEST_CASE("Codec id is recorded and both codecs roundtrip identically")
+TEST_CASE("rANS marker and delta mask are recorded")
 {
     const std::array<int, 3> shape{8, 6, 10};
     for (const std::size_t elemSize : {std::size_t{1}, std::size_t{2}}) {
         const auto input = smoothVolume(shape, elemSize);
-        const auto rans = vc_delta3d::compress(asSpan(input), shape, elemSize,
-                                            vc_delta3d::kDefaultZstdLevel,
-                                            vc_delta3d::kQuantizationLossless,
-                                            vc_delta3d::EntropyCodec::Rans);
-        const auto zstd = vc_delta3d::compress(asSpan(input), shape, elemSize,
-                                            vc_delta3d::kDefaultZstdLevel,
-                                            vc_delta3d::kQuantizationLossless,
-                                            vc_delta3d::EntropyCodec::Zstd);
-        CHECK(vc_delta3d::entropyCodec(asSpan(rans)) == vc_delta3d::EntropyCodec::Rans);
-        CHECK(vc_delta3d::entropyCodec(asSpan(zstd)) == vc_delta3d::EntropyCodec::Zstd);
-        // rANS payloads record their delta-axis mask (flag bit 7); zstd
-        // payloads keep the plain codec byte for Python compatibility.
-        CHECK((static_cast<int>(rans[7]) & 0x0F) == 1);
-        CHECK((static_cast<int>(rans[7]) & 0x80) == 0x80);
-        CHECK(static_cast<int>(zstd[7]) == 0);
-        CHECK(vc_delta3d::deltaMask(asSpan(rans)).has_value());
-        CHECK_FALSE(vc_delta3d::deltaMask(asSpan(zstd)).has_value());
-
-        const auto fromRans = vc_delta3d::decompress(asSpan(rans), input.size());
-        const auto fromZstd = vc_delta3d::decompress(asSpan(zstd), input.size());
-        REQUIRE(fromRans.has_value());
-        REQUIRE(fromZstd.has_value());
-        CHECK(*fromRans == input);
-        CHECK(*fromZstd == input);
+        const auto encoded =
+            vc_delta3d::compress(asSpan(input), shape, elemSize);
+        CHECK((static_cast<int>(encoded[7]) & 0x0F) == 1);
+        CHECK((static_cast<int>(encoded[7]) & 0x80) == 0x80);
+        CHECK(vc_delta3d::deltaMask(asSpan(encoded)).has_value());
+        const auto decoded =
+            vc_delta3d::decompress(asSpan(encoded), input.size());
+        REQUIRE(decoded.has_value());
+        CHECK(*decoded == input);
     }
-
-    // Default codec for new payloads is rANS.
-    const auto input = smoothVolume(shape, 1);
-    const auto def = vc_delta3d::compress(asSpan(input), shape, 1);
-    CHECK(vc_delta3d::entropyCodec(asSpan(def)) == vc_delta3d::kDefaultEntropyCodec);
-    CHECK(vc_delta3d::kDefaultEntropyCodec == vc_delta3d::EntropyCodec::Rans);
 }
 
 TEST_CASE("Per-chunk delta mask roundtrips on directional data")
@@ -294,14 +224,12 @@ TEST_CASE("rANS payloads without a mask decode as full zyx")
 
     compressed[7] = std::byte{1};
     CHECK_FALSE(vc_delta3d::deltaMask(asSpan(compressed)).has_value());
-    CHECK(vc_delta3d::entropyCodec(asSpan(compressed)) == vc_delta3d::EntropyCodec::Rans);
     const auto decoded = vc_delta3d::decompress(asSpan(compressed), input.size());
     REQUIRE(decoded.has_value());
     CHECK(*decoded == input);
 
     // Mask bits without the flag bit are not a valid codec byte.
     compressed[7] = std::byte{0x51};
-    CHECK_FALSE(vc_delta3d::entropyCodec(asSpan(compressed)).has_value());
     CHECK_FALSE(vc_delta3d::decompress(asSpan(compressed), input.size()).has_value());
 }
 
@@ -326,14 +254,11 @@ TEST_CASE("rANS handles degenerate and incompressible payloads")
     CHECK(*dnoise == noise);
 }
 
-TEST_CASE("Corrupt rANS payloads and unknown codec ids return nullopt")
+TEST_CASE("Corrupt rANS payloads and invalid markers return nullopt")
 {
     const std::array<int, 3> shape{8, 8, 8};
     const auto input = smoothVolume(shape, 1);
-    const auto good = vc_delta3d::compress(asSpan(input), shape, 1,
-                                        vc_delta3d::kDefaultZstdLevel,
-                                        vc_delta3d::kQuantizationLossless,
-                                        vc_delta3d::EntropyCodec::Rans);
+    const auto good = vc_delta3d::compress(asSpan(input), shape, 1);
     REQUIRE(vc_delta3d::decompress(asSpan(good), input.size()).has_value());
 
     // Truncated stream.
@@ -352,11 +277,10 @@ TEST_CASE("Corrupt rANS payloads and unknown codec ids return nullopt")
         static_cast<unsigned char>(badTable[20]) ^ 0x01);
     CHECK_FALSE(vc_delta3d::decompress(asSpan(badTable), input.size()).has_value());
 
-    // Unknown codec id.
-    auto badCodec = good;
-    badCodec[7] = std::byte{0x7E};
-    CHECK_FALSE(vc_delta3d::entropyCodec(asSpan(badCodec)).has_value());
-    CHECK_FALSE(vc_delta3d::decompress(asSpan(badCodec), input.size()).has_value());
+    // Invalid entropy marker.
+    auto badMarker = good;
+    badMarker[7] = std::byte{0x7E};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMarker), input.size()).has_value());
 }
 
 TEST_CASE("Corrupt and mismatched payloads return nullopt")
@@ -368,12 +292,12 @@ TEST_CASE("Corrupt and mismatched payloads return nullopt")
     // Wrong expected size (header dims disagree).
     CHECK_FALSE(vc_delta3d::decompress(asSpan(compressed), input.size() + 1).has_value());
 
-    // Truncated zstd frame.
+    // Truncated rANS frame.
     std::vector<std::byte> truncated(compressed.begin(),
                                      compressed.begin() + compressed.size() / 2);
     CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
 
-    // Garbage bytes (neither D3D1 nor zstd).
+    // Garbage bytes without a D3D1 header.
     std::vector<std::byte> garbage(64, std::byte{0xAB});
     CHECK_FALSE(vc_delta3d::decompress(asSpan(garbage), input.size()).has_value());
 }

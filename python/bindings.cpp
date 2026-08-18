@@ -1,6 +1,5 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
-#include <nanobind/stl/string.h>
 
 #include <vc_delta3d/codec.hpp>
 
@@ -9,21 +8,11 @@
 #include <cstring>
 #include <span>
 #include <stdexcept>
-#include <string>
 
 namespace nb = nanobind;
 using namespace nb::literals;
 
 namespace {
-
-vc_delta3d::EntropyCodec parseCodec(const std::string& codec)
-{
-    if (codec == "rans")
-        return vc_delta3d::EntropyCodec::Rans;
-    if (codec == "zstd")
-        return vc_delta3d::EntropyCodec::Zstd;
-    throw std::invalid_argument("codec must be 'rans' or 'zstd'");
-}
 
 vc_delta3d::WireMagic parseMagic(nb::bytes magic)
 {
@@ -37,8 +26,7 @@ vc_delta3d::WireMagic parseMagic(nb::bytes magic)
 template <typename T>
 nb::bytes compressArray(
     nb::ndarray<nb::numpy, const T, nb::ndim<3>, nb::c_contig> array,
-    int quant,
-    const std::string& codec)
+    int quant)
 {
     const auto z = static_cast<int>(array.shape(0));
     const auto y = static_cast<int>(array.shape(1));
@@ -46,8 +34,7 @@ nb::bytes compressArray(
     const auto nbytes = static_cast<std::size_t>(array.size()) * sizeof(T);
     const auto out = vc_delta3d::compress(
         {reinterpret_cast<const std::byte*>(array.data()), nbytes},
-        {z, y, x}, sizeof(T), vc_delta3d::kDefaultZstdLevel, quant,
-        parseCodec(codec));
+        {z, y, x}, sizeof(T), quant);
     return nb::bytes(reinterpret_cast<const char*>(out.data()), out.size());
 }
 
@@ -59,22 +46,19 @@ NB_MODULE(_codec, m)
 
     m.def(
         "compress",
-        [](nb::bytes raw, int z, int y, int x, int elem_size, int quant,
-           const std::string& codec) {
+        [](nb::bytes raw, int z, int y, int x, int elem_size, int quant) {
             const auto out = vc_delta3d::compress(
                 {reinterpret_cast<const std::byte*>(raw.c_str()), raw.size()},
-                {z, y, x}, static_cast<std::size_t>(elem_size),
-                vc_delta3d::kDefaultZstdLevel, quant, parseCodec(codec));
+                {z, y, x}, static_cast<std::size_t>(elem_size), quant);
             return nb::bytes(reinterpret_cast<const char*>(out.data()),
                              out.size());
         },
-        "raw"_a, "z"_a, "y"_a, "x"_a, "elem_size"_a, "quant"_a = 1,
-        "codec"_a = "rans");
+        "raw"_a, "z"_a, "y"_a, "x"_a, "elem_size"_a, "quant"_a = 1);
 
     m.def("compress_array", &compressArray<std::uint8_t>,
-          "array"_a, "quant"_a = 1, "codec"_a = "rans");
+          "array"_a, "quant"_a = 1);
     m.def("compress_array", &compressArray<std::uint16_t>,
-          "array"_a, "quant"_a = 1, "codec"_a = "rans");
+          "array"_a, "quant"_a = 1);
 
     m.def(
         "decompress",

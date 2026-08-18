@@ -2,7 +2,7 @@
 
 VC-Delta3D compresses three-dimensional `uint8` and `uint16` scalar fields.
 It combines optional bounded scalar quantization, an axis-adaptive Lorenzo
-delta transform, and either order-0 rANS or zstd entropy coding.
+delta transform, and order-0 rANS entropy coding.
 
 Encoded chunks use the self-describing `D3D1` wire format and the Zarr
 compressor identifier `vc-delta3d`.
@@ -23,7 +23,7 @@ CMake consumers can link `vc_delta3d::vc_delta3d`.
 ```python
 from vc_delta3d import Delta3D
 
-codec = Delta3D(codec="rans", quant=1)
+codec = Delta3D(quant=1)
 encoded = codec.encode(array)
 decoded = codec.decode(encoded)
 ```

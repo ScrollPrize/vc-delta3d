@@ -14,11 +14,10 @@ class Delta3D(numcodecs.abc.Codec):
     codec_id = "vc-delta3d"
 
     def __init__(self, codec: str = "rans", quant: int = 1):
-        if codec not in {"rans", "zstd"}:
-            raise ValueError("codec must be 'rans' or 'zstd'")
+        if codec != "rans":
+            raise ValueError("vc-delta3d only supports rANS entropy coding")
         if not 1 <= int(quant) <= 255:
             raise ValueError("quant must be in [1, 255]")
-        self.codec = codec
         self.quant = int(quant)
 
     def encode(self, buf):
@@ -29,7 +28,7 @@ class Delta3D(numcodecs.abc.Codec):
             raise ValueError("vc-delta3d supports uint8 and uint16 chunks")
         if not array.flags.c_contiguous:
             array = np.ascontiguousarray(array)
-        return _codec.compress_array(array, self.quant, self.codec)
+        return _codec.compress_array(array, self.quant)
 
     def decode(self, buf, out=None):
         payload = buf if isinstance(buf, bytes) else bytes(memoryview(buf))
@@ -47,7 +46,7 @@ class Delta3D(numcodecs.abc.Codec):
         return _codec.decompress(payload, expected_size)
 
     def get_config(self):
-        return {"id": self.codec_id, "codec": self.codec, "quant": self.quant}
+        return {"id": self.codec_id, "quant": self.quant}
 
 
 def register() -> None:

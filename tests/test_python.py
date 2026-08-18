@@ -21,7 +21,7 @@ def test_roundtrip_and_registration():
 
 def test_decode_into():
     source = np.arange(3 * 4 * 5, dtype=np.uint8).reshape(3, 4, 5)
-    codec = Delta3D(codec="zstd")
+    codec = Delta3D()
     output = np.empty_like(source)
     assert codec.decode(codec.encode(source), out=output) is output
     np.testing.assert_array_equal(output, source)
