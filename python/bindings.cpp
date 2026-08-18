@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,15 @@ vc_delta3d::EntropyCodec parseCodec(const std::string& codec)
     if (codec == "zstd")
         return vc_delta3d::EntropyCodec::Zstd;
     throw std::invalid_argument("codec must be 'rans' or 'zstd'");
+}
+
+vc_delta3d::WireMagic parseMagic(nb::bytes magic)
+{
+    if (magic.size() != vc_delta3d::kWireMagic.size())
+        throw std::invalid_argument("wire magic must contain exactly 4 bytes");
+    vc_delta3d::WireMagic parsed;
+    std::memcpy(parsed.data(), magic.c_str(), parsed.size());
+    return parsed;
 }
 
 template <typename T>
@@ -94,4 +104,37 @@ NB_MODULE(_codec, m)
                     "not a valid VC-Delta3D payload for the output size");
         },
         "payload"_a, "output"_a);
+
+    m.def(
+        "decompress_with_magic",
+        [](nb::bytes payload, std::size_t expected_size, nb::bytes magic) {
+            const auto expected_magic = parseMagic(magic);
+            auto out = vc_delta3d::decompressWithMagic(
+                {reinterpret_cast<const std::byte*>(payload.c_str()),
+                 payload.size()},
+                expected_size, expected_magic);
+            if (!out)
+                throw std::runtime_error(
+                    "not a valid payload of the expected size and wire magic");
+            return nb::bytes(reinterpret_cast<const char*>(out->data()),
+                             out->size());
+        },
+        "payload"_a, "expected_size"_a, "magic"_a);
+
+    m.def(
+        "decompress_into_with_magic",
+        [](nb::bytes payload,
+           nb::ndarray<nb::numpy, std::uint8_t, nb::c_contig> output,
+           nb::bytes magic) {
+            const auto expected_magic = parseMagic(magic);
+            const auto ok = vc_delta3d::decompressIntoWithMagic(
+                {reinterpret_cast<const std::byte*>(payload.c_str()),
+                 payload.size()},
+                {reinterpret_cast<std::byte*>(output.data()), output.size()},
+                expected_magic);
+            if (!ok)
+                throw std::runtime_error(
+                    "not a valid payload for the output size and wire magic");
+        },
+        "payload"_a, "output"_a, "magic"_a);
 }

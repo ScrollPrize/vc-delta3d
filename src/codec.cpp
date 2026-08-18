@@ -19,7 +19,6 @@ namespace vc_delta3d {
 namespace {
 
 constexpr std::size_t kHeaderSize = 20;
-constexpr unsigned char kMagic[4] = {'D', '3', 'D', '1'};
 constexpr unsigned char kFormatVersion = 1;
 
 // Delta-axis masks: bit 0 differences along x, bit 1 along y, bit 2 along z.
@@ -417,10 +416,12 @@ std::uint32_t readU32(const std::byte* in)
            (static_cast<std::uint32_t>(in[3]) << 24);
 }
 
-bool hasDelta3dHeader(std::span<const std::byte> input)
+bool hasHeader(std::span<const std::byte> input,
+               const WireMagic& expectedMagic)
 {
     return input.size() > kHeaderSize &&
-           std::memcmp(input.data(), kMagic, sizeof(kMagic)) == 0 &&
+           std::equal(expectedMagic.begin(), expectedMagic.end(),
+                      input.begin()) &&
            static_cast<unsigned char>(input[4]) == kFormatVersion;
 }
 
@@ -523,7 +524,7 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     auto output = codec == EntropyCodec::Rans
         ? ransCompressFrame(filteredSpan, kHeaderSize)
         : zstdCompressFrame(filteredSpan, level, kHeaderSize);
-    std::memcpy(output.data(), kMagic, sizeof(kMagic));
+    std::copy(kWireMagic.begin(), kWireMagic.end(), output.begin());
     output[4] = static_cast<std::byte>(kFormatVersion);
     output[5] = static_cast<std::byte>(elemSize);
     output[6] = static_cast<std::byte>(quantBinWidth);
@@ -553,14 +554,14 @@ void quantize(std::span<std::byte> data,
 
 std::optional<int> quantization(std::span<const std::byte> input)
 {
-    if (!hasDelta3dHeader(input))
+    if (!hasHeader(input, kWireMagic))
         return std::nullopt;
     return std::max(1, static_cast<int>(input[6]));
 }
 
 std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input)
 {
-    if (!hasDelta3dHeader(input))
+    if (!hasHeader(input, kWireMagic))
         return std::nullopt;
     const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
     if (!parsed)
@@ -570,7 +571,7 @@ std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input)
 
 std::optional<int> deltaMask(std::span<const std::byte> input)
 {
-    if (!hasDelta3dHeader(input))
+    if (!hasHeader(input, kWireMagic))
         return std::nullopt;
     const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
     if (!parsed || !parsed->hasMask)
@@ -581,7 +582,14 @@ std::optional<int> deltaMask(std::span<const std::byte> input)
 bool decompressInto(std::span<const std::byte> input,
                     std::span<std::byte> output)
 {
-    if (!hasDelta3dHeader(input))
+    return decompressIntoWithMagic(input, output, kWireMagic);
+}
+
+bool decompressIntoWithMagic(std::span<const std::byte> input,
+                             std::span<std::byte> output,
+                             const WireMagic& expectedMagic)
+{
+    if (!hasHeader(input, expectedMagic))
         return false;
 
     const auto elemSize = static_cast<std::size_t>(input[5]);
@@ -620,8 +628,16 @@ std::optional<std::vector<std::byte>> decompress(
     std::span<const std::byte> input,
     std::size_t expectedSize)
 {
+    return decompressWithMagic(input, expectedSize, kWireMagic);
+}
+
+std::optional<std::vector<std::byte>> decompressWithMagic(
+    std::span<const std::byte> input,
+    std::size_t expectedSize,
+    const WireMagic& expectedMagic)
+{
     std::vector<std::byte> output(expectedSize);
-    if (!decompressInto(input, output))
+    if (!decompressIntoWithMagic(input, output, expectedMagic))
         return std::nullopt;
     return output;
 }

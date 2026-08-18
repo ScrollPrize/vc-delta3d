@@ -377,3 +377,26 @@ TEST_CASE("Corrupt and mismatched payloads return nullopt")
     std::vector<std::byte> garbage(64, std::byte{0xAB});
     CHECK_FALSE(vc_delta3d::decompress(asSpan(garbage), input.size()).has_value());
 }
+
+TEST_CASE("Alternate wire magic decodes without rewriting the input")
+{
+    const std::array<int, 3> shape{4, 5, 6};
+    const auto input = smoothVolume(shape, 1);
+    auto encoded = vc_delta3d::compress(asSpan(input), shape, 1);
+    constexpr vc_delta3d::WireMagic alternateMagic{
+        std::byte{'A'}, std::byte{'L'}, std::byte{'T'}, std::byte{'1'}};
+    std::copy(alternateMagic.begin(), alternateMagic.end(), encoded.begin());
+
+    CHECK_FALSE(
+        vc_delta3d::decompress(asSpan(encoded), input.size()).has_value());
+
+    std::vector<std::byte> output(input.size());
+    CHECK(vc_delta3d::decompressIntoWithMagic(
+        asSpan(encoded), output, alternateMagic));
+    CHECK(output == input);
+
+    const auto allocated = vc_delta3d::decompressWithMagic(
+        asSpan(encoded), input.size(), alternateMagic);
+    REQUIRE(allocated.has_value());
+    CHECK(*allocated == input);
+}

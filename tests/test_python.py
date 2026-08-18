@@ -1,7 +1,11 @@
 import numcodecs
 import numpy as np
 
-from vc_delta3d import Delta3D
+from vc_delta3d import (
+    Delta3D,
+    decompress_into_with_magic,
+    decompress_with_magic,
+)
 
 
 def test_roundtrip_and_registration():
@@ -20,4 +24,19 @@ def test_decode_into():
     codec = Delta3D(codec="zstd")
     output = np.empty_like(source)
     assert codec.decode(codec.encode(source), out=output) is output
+    np.testing.assert_array_equal(output, source)
+
+
+def test_alternate_wire_magic():
+    source = np.arange(3 * 4 * 5, dtype=np.uint8).reshape(3, 4, 5)
+    encoded = Delta3D().encode(source)
+    alternate = b"ALT1" + encoded[4:]
+
+    decoded = decompress_with_magic(alternate, source.nbytes, b"ALT1")
+    np.testing.assert_array_equal(
+        np.frombuffer(decoded, dtype=np.uint8).reshape(source.shape), source
+    )
+
+    output = np.empty_like(source)
+    decompress_into_with_magic(alternate, output.view(np.uint8), b"ALT1")
     np.testing.assert_array_equal(output, source)

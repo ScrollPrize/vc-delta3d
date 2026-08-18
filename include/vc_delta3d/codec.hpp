@@ -72,6 +72,13 @@ inline constexpr EntropyCodec kDefaultEntropyCodec = EntropyCodec::Rans;
 // Zarr codec identifier.
 inline constexpr const char* kCodecId = "vc-delta3d";
 
+// Four-byte identifier at the start of an encoded payload. The magic-aware
+// decode entry points allow an embedding application to use the same payload
+// layout inside an alternate envelope without rewriting the input buffer.
+using WireMagic = std::array<std::byte, 4>;
+inline constexpr WireMagic kWireMagic{
+    std::byte{'D'}, std::byte{'3'}, std::byte{'D'}, std::byte{'1'}};
+
 // Common near-lossless quantization widths. Width 1 is lossless; width 2k+1
 // bounds the per-voxel error by +-k.
 inline constexpr int kQuantizationLossless = 1;
@@ -123,5 +130,16 @@ std::optional<std::vector<std::byte>> decompress(
 // invalid input or size mismatch.
 bool decompressInto(std::span<const std::byte> input,
                     std::span<std::byte> output);
+
+// Variants of decompress/decompressInto that validate expectedMagic instead
+// of kWireMagic. The input is decoded in place without copying it.
+std::optional<std::vector<std::byte>> decompressWithMagic(
+    std::span<const std::byte> input,
+    std::size_t expectedSize,
+    const WireMagic& expectedMagic);
+
+bool decompressIntoWithMagic(std::span<const std::byte> input,
+                             std::span<std::byte> output,
+                             const WireMagic& expectedMagic);
 
 } // namespace vc_delta3d
