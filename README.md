@@ -37,7 +37,7 @@ cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
-On 128 randomly selected nonzero chunks of `s3://vesuvius-challenge-open-data/PHercParis4/volumes/20260411134726-2.400um-0.2m-78keV-masked.zarr/5`  
+Performance on `s3://vesuvius-challenge-open-data/PHercParis4/volumes/20260411134726-2.400um-0.2m-78keV-masked.zarr/5` :   
 
 ```
 start size:       2.30 GiB (2,474,382,596 bytes)
@@ -47,3 +47,5 @@ encode speed:     316.5 MiB/s
 decode speed:     449.8 MiB/s
 copy throughput:  85.5 MiB/s
 ```
+
+Size is for the full array , enc/dec speed are calculated from 128 randomly selected nonzero chunks 
