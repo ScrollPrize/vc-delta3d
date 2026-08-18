@@ -11,6 +11,12 @@
 #include <intrin.h>   // __umulh / _udiv128 for the 128-bit rANS reciprocal math
 #endif
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+
 namespace vc_delta3d {
 
 namespace {
@@ -51,6 +57,57 @@ void deltaFilter(T* data, std::size_t z, std::size_t y, std::size_t x,
         }
 }
 
+// Inclusive prefix sum over one row of uint8 (log-step shift-adds per
+// 16-byte vector, then a running carry across vectors). Wrap-around adds
+// match the scalar path exactly.
+#if defined(__ARM_NEON)
+#define VC_DELTA3D_PREFIX_U8 1
+inline void prefixSumRowU8(std::uint8_t* p, std::size_t x)
+{
+    const uint8x16_t zero = vdupq_n_u8(0);
+    uint8x16_t carry = zero;
+    std::size_t i = 0;
+    for (; i + 16 <= x; i += 16) {
+        uint8x16_t v = vld1q_u8(p + i);
+        v = vaddq_u8(v, vextq_u8(zero, v, 15));
+        v = vaddq_u8(v, vextq_u8(zero, v, 14));
+        v = vaddq_u8(v, vextq_u8(zero, v, 12));
+        v = vaddq_u8(v, vextq_u8(zero, v, 8));
+        v = vaddq_u8(v, carry);
+        vst1q_u8(p + i, v);
+        carry = vdupq_laneq_u8(v, 15);
+    }
+    std::uint8_t c = vgetq_lane_u8(carry, 0);
+    for (; i < x; ++i) {
+        c = static_cast<std::uint8_t>(p[i] + c);
+        p[i] = c;
+    }
+}
+#elif defined(__SSE2__)
+#define VC_DELTA3D_PREFIX_U8 1
+inline void prefixSumRowU8(std::uint8_t* p, std::size_t x)
+{
+    __m128i carry = _mm_setzero_si128();
+    std::size_t i = 0;
+    for (; i + 16 <= x; i += 16) {
+        __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + i));
+        v = _mm_add_epi8(v, _mm_slli_si128(v, 1));
+        v = _mm_add_epi8(v, _mm_slli_si128(v, 2));
+        v = _mm_add_epi8(v, _mm_slli_si128(v, 4));
+        v = _mm_add_epi8(v, _mm_slli_si128(v, 8));
+        v = _mm_add_epi8(v, carry);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(p + i), v);
+        carry = _mm_set1_epi8(
+            static_cast<char>(_mm_extract_epi16(v, 7) >> 8));
+    }
+    auto c = static_cast<std::uint8_t>(_mm_cvtsi128_si32(carry));
+    for (; i < x; ++i) {
+        c = static_cast<std::uint8_t>(p[i] + c);
+        p[i] = c;
+    }
+}
+#endif
+
 // Inverse: forward prefix sums along x, then y, then z.
 template <typename T>
 void deltaUnfilter(T* data, std::size_t z, std::size_t y, std::size_t x,
@@ -61,6 +118,12 @@ void deltaUnfilter(T* data, std::size_t z, std::size_t y, std::size_t x,
     if (mask & 1)
         for (std::size_t r = 0; r < z * y; ++r) {
             T* p = data + r * x;
+#if defined(VC_DELTA3D_PREFIX_U8)
+            if constexpr (sizeof(T) == 1) {
+                prefixSumRowU8(reinterpret_cast<std::uint8_t*>(p), x);
+                continue;
+            }
+#endif
             for (std::size_t i = 1; i < x; ++i)
                 p[i] = static_cast<T>(p[i] + p[i - 1]);
         }
@@ -89,11 +152,11 @@ unsigned selectDeltaMask(const std::uint8_t* q,
                          std::size_t y,
                          std::size_t x)
 {
-    std::uint64_t h[8][256] = {};
+    std::uint32_t h[8][256] = {};
     std::uint64_t n = 0;
     const std::size_t slice = y * x;
     for (std::size_t zz = 1; zz < z; zz += 4) {
-        for (std::size_t yy = 1; yy < y; ++yy) {
+        for (std::size_t yy = 1; yy < y; yy += 2) {
             const std::uint8_t* p = q + zz * slice + yy * x;
             const std::uint8_t* py = p - x;
             const std::uint8_t* pz = p - slice;
@@ -170,6 +233,7 @@ constexpr std::size_t kRansStateBytes = kRansLanes * 8;
 struct RansEncSym {
     std::uint64_t rcp;   // reciprocal so q = mulhi(x, rcp) >> shift = x/freq
     std::uint64_t bias;  // cum, or cum + M - 1 for freq 1 (rcp = 2^64 - 1)
+    std::uint64_t xmax;  // renorm threshold ((L>>12)<<32) * freq
     std::uint32_t cmpl;  // M - freq
     std::uint32_t shift;
 };
@@ -220,8 +284,9 @@ void ransBuildEncTable(const std::uint32_t freq[256], RansEncSym enc[256])
         const std::uint32_t f = freq[s];
         RansEncSym& e = enc[s];
         e.cmpl = kRansM - f;
+        e.xmax = ((kRansL >> kRansScaleBits) << 32) * f;
         if (f == 0) {
-            e = {0, 0, 0, 0};
+            e = {};
         } else if (f == 1) {
             // mulhi(x, 2^64 - 1) = x - 1; the off-by-(M-1) folds into bias
             e.rcp = ~0ull;
@@ -289,18 +354,40 @@ std::vector<std::byte> ransCompressFrame(std::span<const std::byte> input,
     std::uint8_t* p = end;
     std::uint64_t x[kRansLanes];
     std::fill(std::begin(x), std::end(x), kRansL);
-    for (std::size_t j = n; j-- > 0;) {
+    // Branchless renorm: speculatively store each lane's low word below the
+    // claimed stream and only advance past it when the state actually
+    // overflows; the buffer's slack keeps the speculative store in bounds.
+    std::size_t j = n;
+    while (j & (kRansLanes - 1)) {
+        --j;
         const RansEncSym& e = enc[in[j]];
         std::uint64_t& s = x[j & (kRansLanes - 1)];
-        const std::uint64_t xmax = ((kRansL >> kRansScaleBits) << 32) * (kRansM - e.cmpl);
-        if (s >= xmax) {
-            p -= 4;
-            const auto w = static_cast<std::uint32_t>(s);
-            std::memcpy(p, &w, 4);
-            s >>= 32;
-        }
+        const auto w = static_cast<std::uint32_t>(s);
+        std::memcpy(p - 4, &w, 4);
+        const bool renorm = s >= e.xmax;
+        p -= renorm ? 4 : 0;
+        s = renorm ? s >> 32 : s;
         const std::uint64_t q = ransMulHi(s, e.rcp) >> e.shift;
         s = s + e.bias + q * e.cmpl;
+    }
+    // Blocks of eight: renorm decisions depend only on each lane's own
+    // state, so only the cheap store-offset adds serialize across lanes.
+    while (j) {
+        j -= kRansLanes;
+        const std::uint8_t* sym = in + j;
+        std::size_t o = 0;
+        for (std::size_t k = kRansLanes; k-- > 0;) {
+            const RansEncSym& e = enc[sym[k]];
+            std::uint64_t s = x[k];
+            const auto w = static_cast<std::uint32_t>(s);
+            std::memcpy(p - o - 4, &w, 4);
+            const bool renorm = s >= e.xmax;
+            o += renorm ? 4 : 0;
+            s = renorm ? s >> 32 : s;
+            const std::uint64_t q = ransMulHi(s, e.rcp) >> e.shift;
+            x[k] = s + e.bias + q * e.cmpl;
+        }
+        p -= o;
     }
     for (std::size_t k = kRansLanes; k-- > 0;) {
         p -= 8;
@@ -335,10 +422,13 @@ bool ransDecompressFrame(std::span<const std::byte> frame,
     }
     if (total != kRansM)
         return false;
-    static thread_local std::uint8_t slot2sym[kRansM];
+    // Fused per-slot entry: one L1 load yields symbol, freq-1 and
+    // slot - cum (each fits 12/8 bits within a uint32).
+    static thread_local std::uint32_t slotEntry[kRansM];
     for (int s = 0; s < 256; ++s)
-        if (freq[s])
-            std::memset(slot2sym + cum[s], s, freq[s]);
+        for (std::uint32_t j = 0; j < freq[s]; ++j)
+            slotEntry[cum[s] + j] =
+                ((freq[s] - 1) << 20) | (j << 8) | static_cast<std::uint32_t>(s);
 
     const auto* p = reinterpret_cast<const std::uint8_t*>(frame.data()) +
                     kRansTableBytes;
@@ -352,31 +442,37 @@ bool ransDecompressFrame(std::span<const std::byte> frame,
 
     auto* out = reinterpret_cast<std::uint8_t*>(outBytes);
     std::size_t i = 0;
-    for (; i + kRansLanes <= n; i += kRansLanes) {
+    // Fast path: while >= 32 stream bytes remain, all eight lanes can renorm
+    // branchlessly (each consumes at most 4 bytes per symbol).
+    for (; i + kRansLanes <= n && end - p >= 32; i += kRansLanes) {
+        // Stage 1: symbol resolve + state advance, independent per lane.
+        std::uint64_t t[kRansLanes];
         for (std::size_t k = 0; k < kRansLanes; ++k) {
-            std::uint64_t& s = x[k];
-            const auto slot = static_cast<std::uint32_t>(s) & (kRansM - 1);
-            const std::uint8_t sym = slot2sym[slot];
-            out[i + k] = sym;
-            s = static_cast<std::uint64_t>(freq[sym]) * (s >> kRansScaleBits) +
-                slot - cum[sym];
-            if (s < kRansL) {
-                std::uint32_t w = 0;
-                if (p + 4 > end)
-                    return false;
-                std::memcpy(&w, p, 4);
-                p += 4;
-                s = (s << 32) | w;
-            }
+            const auto slot = static_cast<std::uint32_t>(x[k]) & (kRansM - 1);
+            const std::uint32_t e = slotEntry[slot];
+            out[i + k] = static_cast<std::uint8_t>(e);
+            t[k] = (static_cast<std::uint64_t>(e >> 20) + 1) *
+                       (x[k] >> kRansScaleBits) +
+                   ((e >> 8) & 0xFFF);
         }
+        // Stage 2: branchless renorm; only the cheap offset adds serialize.
+        std::size_t o = 0;
+        for (std::size_t k = 0; k < kRansLanes; ++k) {
+            std::uint32_t w;
+            std::memcpy(&w, p + o, 4);
+            const bool renorm = t[k] < kRansL;
+            x[k] = renorm ? (t[k] << 32) | w : t[k];
+            o += renorm ? 4 : 0;
+        }
+        p += o;
     }
     for (; i < n; ++i) {
         std::uint64_t& s = x[i & (kRansLanes - 1)];
         const auto slot = static_cast<std::uint32_t>(s) & (kRansM - 1);
-        const std::uint8_t sym = slot2sym[slot];
-        out[i] = sym;
-        s = static_cast<std::uint64_t>(freq[sym]) * (s >> kRansScaleBits) +
-            slot - cum[sym];
+        const std::uint32_t e = slotEntry[slot];
+        out[i] = static_cast<std::uint8_t>(e);
+        s = (static_cast<std::uint64_t>(e >> 20) + 1) * (s >> kRansScaleBits) +
+            ((e >> 8) & 0xFFF);
         if (s < kRansL) {
             std::uint32_t w = 0;
             if (p + 4 > end)
