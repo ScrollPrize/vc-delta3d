@@ -8,10 +8,9 @@
 
 namespace vc_delta3d {
 
-// Compression for three-dimensional uint8 and uint16 scalar fields. The
-// encoded stream retains the original "VCZ1" wire format so data written by
-// Volume Cartographer remains byte-compatible. A small header is followed by
-// an entropy-coded frame of the delta-filtered voxels. The
+// Compression for three-dimensional uint8 and uint16 scalar fields. A small
+// D3D1 header is followed by an entropy-coded frame of the delta-filtered
+// voxels. The
 // filter stores each element as the difference from its predecessor along a
 // per-chunk subset of the z, y, x axes (mod 2^8/2^16), which roughly halves
 // the compressed size of scroll CT data compared to zstd on raw bytes while
@@ -50,8 +49,8 @@ namespace vc_delta3d {
 // recompression can tell what an existing payload already carries;
 // quantization is idempotent, so re-encoding at the same width is lossless.
 //
-// VCZ1 layout (all integers little-endian):
-//   0..3   magic 'V' 'C' 'Z' '1'
+// D3D1 layout (all integers little-endian):
+//   0..3   magic 'D' '3' 'D' '1'
 //   4      format version (1)
 //   5      element size in bytes (1 or 2)
 //   6      quantization bin width (0 and 1 both mean lossless)
@@ -66,13 +65,12 @@ namespace vc_delta3d {
 //                   stream (decoded back to front by construction)
 inline constexpr int kDefaultZstdLevel = 1;
 
-// Entropy codec for the filtered payload (VCZ1 header byte 7).
+// Entropy codec for the filtered payload (D3D1 header byte 7).
 enum class EntropyCodec : unsigned char { Zstd = 0, Rans = 1 };
 inline constexpr EntropyCodec kDefaultEntropyCodec = EntropyCodec::Rans;
 
-// Current and legacy Zarr codec identifiers. Both use the same wire format.
+// Zarr codec identifier.
 inline constexpr const char* kCodecId = "vc-delta3d";
-inline constexpr const char* kLegacyCodecId = "vcz1";
 
 // Common near-lossless quantization widths. Width 1 is lossless; width 2k+1
 // bounds the per-voxel error by +-k.
@@ -100,22 +98,22 @@ void quantize(std::span<std::byte> data,
               std::size_t elemSize,
               int quantBinWidth);
 
-// Quantization bin width recorded in a VCZ1 payload (>= 1), or std::nullopt
-// if input is not a VCZ1 payload. Payloads written before quantization
+// Quantization bin width recorded in a D3D1 payload (>= 1), or std::nullopt
+// if input is not a D3D1 payload. Payloads written before quantization
 // existed report 1 (lossless).
 std::optional<int> quantization(std::span<const std::byte> input);
 
-// Entropy codec recorded in a VCZ1 payload, or std::nullopt if input is not
-// a VCZ1 payload or names an unknown codec.
+// Entropy codec recorded in a D3D1 payload, or std::nullopt if input is not
+// a D3D1 payload or names an unknown codec.
 std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input);
 
-// Delta-axis mask recorded in a VCZ1 payload (bit 0 x, bit 1 y, bit 2 z), or
-// std::nullopt if input is not a VCZ1 payload or predates per-chunk filter
+// Delta-axis mask recorded in a D3D1 payload (bit 0 x, bit 1 y, bit 2 z), or
+// std::nullopt if input is not a D3D1 payload or predates per-chunk filter
 // selection (such payloads are always full zyx). Recompression uses this to
 // tell whether re-encoding a payload could still shrink it.
 std::optional<int> deltaMask(std::span<const std::byte> input);
 
-// Decompresses a VCZ1 payload whose decoded size must equal expectedSize.
+// Decompresses a D3D1 payload whose decoded size must equal expectedSize.
 // Returns std::nullopt on any error or size mismatch.
 std::optional<std::vector<std::byte>> decompress(
     std::span<const std::byte> input,

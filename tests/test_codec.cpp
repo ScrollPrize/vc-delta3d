@@ -1,4 +1,4 @@
-// VC-Delta3D codec coverage: VCZ1 delta-zyx+zstd roundtrips and
+// VC-Delta3D codec coverage: D3D1 delta-zyx+zstd roundtrips and
 // corrupt/mismatched payload handling.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -51,16 +51,16 @@ std::span<const std::byte> asSpan(const std::vector<std::byte>& v)
 
 } // namespace
 
-TEST_CASE("VCZ1 roundtrip uint8")
+TEST_CASE("D3D1 roundtrip uint8")
 {
     const std::array<int, 3> shape{8, 6, 10};
     const auto input = smoothVolume(shape, 1);
     const auto compressed = vc_delta3d::compress(asSpan(input), shape, 1);
 
     REQUIRE(compressed.size() > 20);
-    CHECK(static_cast<char>(compressed[0]) == 'V');
-    CHECK(static_cast<char>(compressed[1]) == 'C');
-    CHECK(static_cast<char>(compressed[2]) == 'Z');
+    CHECK(static_cast<char>(compressed[0]) == 'D');
+    CHECK(static_cast<char>(compressed[1]) == '3');
+    CHECK(static_cast<char>(compressed[2]) == 'D');
     CHECK(static_cast<char>(compressed[3]) == '1');
 
     const auto decoded = vc_delta3d::decompress(asSpan(compressed), input.size());
@@ -68,7 +68,7 @@ TEST_CASE("VCZ1 roundtrip uint8")
     CHECK(*decoded == input);
 }
 
-TEST_CASE("VCZ1 roundtrip uint16")
+TEST_CASE("D3D1 roundtrip uint16")
 {
     const std::array<int, 3> shape{5, 7, 9};
     const auto input = smoothVolume(shape, 2);
@@ -78,13 +78,13 @@ TEST_CASE("VCZ1 roundtrip uint16")
     CHECK(*decoded == input);
 }
 
-TEST_CASE("Legacy VCZ1 zstd fixture remains decodable")
+TEST_CASE("D3D1 zstd fixture remains decodable")
 {
     // Version-1 payload for uint8 values [0, 1, ..., 7] with shape 2x2x2.
     // Keep this fixed fixture independent of the encoder so wire-format
     // compatibility cannot accidentally regress with a matching code change.
     constexpr unsigned char encodedBytes[] = {
-        0x56, 0x43, 0x5a, 0x31, 0x01, 0x01, 0x01, 0x00,
+        0x44, 0x33, 0x44, 0x31, 0x01, 0x01, 0x01, 0x00,
         0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
         0x02, 0x00, 0x00, 0x00, 0x28, 0xb5, 0x2f, 0xfd,
         0x20, 0x08, 0x41, 0x00, 0x00, 0x00, 0x01, 0x02,
@@ -98,7 +98,7 @@ TEST_CASE("Legacy VCZ1 zstd fixture remains decodable")
         CHECK((*decoded)[i] == static_cast<std::byte>(i));
 }
 
-TEST_CASE("VCZ1 roundtrip single-voxel and flat shapes")
+TEST_CASE("D3D1 roundtrip single-voxel and flat shapes")
 {
     for (const auto shape : {std::array<int, 3>{1, 1, 1},
                              std::array<int, 3>{1, 1, 16},
@@ -137,7 +137,7 @@ TEST_CASE("Mismatched shape or element size throws")
                     std::invalid_argument);
 }
 
-TEST_CASE("Plain zstd frames without a VCZ1 header are rejected")
+TEST_CASE("Plain zstd frames without a D3D1 header are rejected")
 {
     const std::array<int, 3> shape{4, 4, 4};
     const auto input = smoothVolume(shape, 1);
@@ -282,11 +282,11 @@ TEST_CASE("Per-chunk delta mask roundtrips on directional data")
     }
 }
 
-TEST_CASE("Legacy rANS payloads without a mask decode as full zyx")
+TEST_CASE("rANS payloads without a mask decode as full zyx")
 {
-    // uint16 payloads never probe, so their filter is exactly the legacy
-    // zyx cascade; clearing the header's mask bits reconstructs a payload
-    // written before per-chunk selection existed and it must still decode.
+    // uint16 payloads never probe, so their filter is the fixed zyx cascade;
+    // clearing the header's mask bits reconstructs a payload written before
+    // per-chunk selection existed and it must still decode.
     const std::array<int, 3> shape{6, 5, 7};
     const auto input = smoothVolume(shape, 2);
     auto compressed = vc_delta3d::compress(asSpan(input), shape, 2);
@@ -373,7 +373,7 @@ TEST_CASE("Corrupt and mismatched payloads return nullopt")
                                      compressed.begin() + compressed.size() / 2);
     CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
 
-    // Garbage bytes (neither VCZ1 nor zstd).
+    // Garbage bytes (neither D3D1 nor zstd).
     std::vector<std::byte> garbage(64, std::byte{0xAB});
     CHECK_FALSE(vc_delta3d::decompress(asSpan(garbage), input.size()).has_value());
 }

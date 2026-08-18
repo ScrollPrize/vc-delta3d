@@ -19,7 +19,6 @@ license = { file = "LICENSE" }
 
 [project.entry-points."numcodecs.codecs"]
 vc-delta3d = "vc_delta3d.numcodecs:Delta3D"
-vcz1 = "vc_delta3d.numcodecs:Vcz1"
 
 [tool.scikit-build]
 cmake.version = ">=3.22"

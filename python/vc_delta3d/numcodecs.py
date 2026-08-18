@@ -1,4 +1,4 @@
-"""numcodecs adapters for VC-Delta3D and its legacy VCZ1 identifier."""
+"""numcodecs adapter for VC-Delta3D."""
 
 from __future__ import annotations
 
@@ -50,21 +50,14 @@ class Delta3D(numcodecs.abc.Codec):
         return {"id": self.codec_id, "codec": self.codec, "quant": self.quant}
 
 
-class Vcz1(Delta3D):
-    """Compatibility adapter for Zarr metadata using the original codec ID."""
-
-    codec_id = "vcz1"
-
-
 def register() -> None:
-    """Register both the current and legacy codec identifiers."""
+    """Register the VC-Delta3D codec identifier."""
 
     numcodecs.register_codec(Delta3D)
-    numcodecs.register_codec(Vcz1)
 
 
 def _shape(payload) -> tuple[int, int, int]:
-    if len(payload) < 20 or payload[:4] != b"VCZ1":
+    if len(payload) < 20 or payload[:4] != b"D3D1":
         raise ValueError("not a VC-Delta3D payload")
     return (
         int.from_bytes(payload[8:12], "little"),

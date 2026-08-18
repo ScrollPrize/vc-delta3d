@@ -4,9 +4,8 @@ VC-Delta3D compresses three-dimensional `uint8` and `uint16` scalar fields.
 It combines optional bounded scalar quantization, an axis-adaptive Lorenzo
 delta transform, and either order-0 rANS or zstd entropy coding.
 
-The project preserves the original `VCZ1` wire format used by Volume
-Cartographer. Existing payloads and Zarr arrays with compressor ID `vcz1`
-remain supported; new Zarr metadata can use `vc-delta3d`.
+Encoded chunks use the self-describing `D3D1` wire format and the Zarr
+compressor identifier `vc-delta3d`.
 
 ## C++
 
@@ -29,8 +28,7 @@ encoded = codec.encode(array)
 decoded = codec.decode(encoded)
 ```
 
-Importing `vc_delta3d` registers both `vc-delta3d` and the legacy `vcz1`
-identifier with numcodecs.
+Importing `vc_delta3d` registers `vc-delta3d` with numcodecs.
 
 ## Build
 

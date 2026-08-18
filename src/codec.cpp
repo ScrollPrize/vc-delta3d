@@ -19,7 +19,7 @@ namespace vc_delta3d {
 namespace {
 
 constexpr std::size_t kHeaderSize = 20;
-constexpr unsigned char kMagic[4] = {'V', 'C', 'Z', '1'};
+constexpr unsigned char kMagic[4] = {'D', '3', 'D', '1'};
 constexpr unsigned char kFormatVersion = 1;
 
 // Delta-axis masks: bit 0 differences along x, bit 1 along y, bit 2 along z.
@@ -417,7 +417,7 @@ std::uint32_t readU32(const std::byte* in)
            (static_cast<std::uint32_t>(in[3]) << 24);
 }
 
-bool hasVcz1Header(std::span<const std::byte> input)
+bool hasDelta3dHeader(std::span<const std::byte> input)
 {
     return input.size() > kHeaderSize &&
            std::memcmp(input.data(), kMagic, sizeof(kMagic)) == 0 &&
@@ -553,14 +553,14 @@ void quantize(std::span<std::byte> data,
 
 std::optional<int> quantization(std::span<const std::byte> input)
 {
-    if (!hasVcz1Header(input))
+    if (!hasDelta3dHeader(input))
         return std::nullopt;
     return std::max(1, static_cast<int>(input[6]));
 }
 
 std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input)
 {
-    if (!hasVcz1Header(input))
+    if (!hasDelta3dHeader(input))
         return std::nullopt;
     const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
     if (!parsed)
@@ -570,7 +570,7 @@ std::optional<EntropyCodec> entropyCodec(std::span<const std::byte> input)
 
 std::optional<int> deltaMask(std::span<const std::byte> input)
 {
-    if (!hasVcz1Header(input))
+    if (!hasDelta3dHeader(input))
         return std::nullopt;
     const auto parsed = parseCodecByte(static_cast<unsigned char>(input[7]));
     if (!parsed || !parsed->hasMask)
@@ -581,7 +581,7 @@ std::optional<int> deltaMask(std::span<const std::byte> input)
 bool decompressInto(std::span<const std::byte> input,
                     std::span<std::byte> output)
 {
-    if (!hasVcz1Header(input))
+    if (!hasDelta3dHeader(input))
         return false;
 
     const auto elemSize = static_cast<std::size_t>(input[5]);
