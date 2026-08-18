@@ -37,7 +37,9 @@ cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release
 ninja -C build
 ctest --test-dir build --output-on-failure
 ```
-Performance on `s3://vesuvius-challenge-open-data/PHercParis4/volumes/20260411134726-2.400um-0.2m-78keV-masked.zarr/5` :   
+
+## Performance
+Measured on `s3://vesuvius-challenge-open-data/PHercParis4/volumes/20260411134726-2.400um-0.2m-78keV-masked.zarr/5` :   
 
 ```
 start size:       2.30 GiB (2,474,382,596 bytes)
