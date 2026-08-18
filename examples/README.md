@@ -17,14 +17,17 @@ credential chain has write permission.
 Try the smallest resolution level first:
 
 ```sh
-python examples/recompress_zarr.py ./PHercParis4-delta3d.zarr --levels 5
+python examples/recompress_zarr.py ./PHercParis4-delta3d.zarr
 ```
+
+Level `5` is selected by default.
 
 Recompress every pyramid level to S3:
 
 ```sh
 python examples/recompress_zarr.py \
-  s3://my-output-bucket/PHercParis4-delta3d.zarr
+  s3://my-output-bucket/PHercParis4-delta3d.zarr \
+  --levels 0 1 2 3 4 5
 ```
 
 The source contains levels `0` through `5`, totaling roughly 92.6 TB of raw

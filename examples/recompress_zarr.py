@@ -1,4 +1,4 @@
-"""Recompress every resolution level of a public Zarr pyramid.
+"""Recompress one or more resolution levels of a public Zarr pyramid.
 
 The source store is read anonymously from S3. The output may be a local path
 or a writable fsspec URL such as ``s3://my-bucket/output.zarr``.
@@ -275,7 +275,8 @@ def parse_args() -> argparse.Namespace:
         "--levels",
         nargs="+",
         metavar="LEVEL",
-        help="Levels to copy (default: every level; use '--levels 5' to trial)",
+        default=["5"],
+        help="Levels to copy (default: 5)",
     )
     parser.add_argument(
         "--quant",
@@ -321,7 +322,7 @@ def main() -> None:
     )
 
     available_levels = sorted(source_group.array_keys(), key=int)
-    levels = args.levels or available_levels
+    levels = args.levels
     missing = sorted(set(levels) - set(available_levels))
     if missing:
         raise SystemExit(
