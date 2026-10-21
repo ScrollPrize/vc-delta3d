@@ -593,15 +593,74 @@ struct LpcGeometry {
     }
 };
 
+// Two taps for an 8-bit multiply-add kernel (vpmaddubsw: u8 * s8, adjacent
+// products summed to int16). Each weight is split into signed digits in
+// [-64, 63], w = d0 + 128 d1 + 16384 d2 (mod 2^16), so a pair sum of two
+// products stays within int16 (2 * 64 * 255 = 32640) and never saturates.
+// d[k] packs digit k of both taps as the int16 (d_k(1) << 8) | u8(d_k(0)),
+// repeated across a 256-bit vector so kernels load it without broadcasting;
+// levels is the number of digits the pair needs (1-3).
+constexpr int kLpcDigitLevels = 3;
+struct LpcTapPair {
+    alignas(32) std::array<std::array<std::int16_t, 16>, kLpcDigitLevels> d{};
+    std::ptrdiff_t off0 = 0, off1 = 0;
+    int levels = 1;
+};
+
 // The selected taps of a chunk as offset/weight lists. With rowTaps false,
 // the two current-row taps are kept apart (wWW, wW) for the decoder's serial
-// scan and the list only reads earlier rows.
+// scan and the list only reads earlier rows. pairs holds the same taps for
+// the 8-bit kernels (see lpcPairTaps).
 struct LpcTapList {
     std::array<std::ptrdiff_t, kLpcTaps> off{};
     std::array<std::uint16_t, kLpcTaps> w{};
     int n = 0;
     std::uint16_t wWW = 0, wW = 0;
+    std::array<LpcTapPair, kLpcTaps / 2> pairs{};
+    int nPairs = 0;
 };
+
+// Fills list.pairs from off/w/n. Taps are paired in order of the digits they
+// need, so most pairs take one multiply-add and only the few large weights
+// take more; an odd tap is paired with a zero weight.
+void lpcPairTaps(LpcTapList& list)
+{
+    struct Digits {
+        std::ptrdiff_t off;
+        std::array<int, kLpcDigitLevels> d;
+        int levels;
+    };
+    std::array<Digits, kLpcTaps + 1> taps{};
+    for (int t = 0; t < list.n; ++t) {
+        int x = static_cast<std::int16_t>(list.w[t]);
+        Digits& tap = taps[t];
+        tap.off = list.off[t];
+        tap.levels = 1;
+        for (int k = 0; k < kLpcDigitLevels; ++k) {
+            tap.d[k] = ((x + 64) & 127) - 64;
+            x = (x - tap.d[k]) / 128;
+            if (tap.d[k] != 0)
+                tap.levels = k + 1;
+        }
+    }
+    std::stable_sort(taps.begin(), taps.begin() + list.n,
+                     [](const Digits& a, const Digits& b) { return a.levels < b.levels; });
+    const int n = list.n + (list.n & 1);
+    if (list.n & 1)
+        taps[list.n] = {taps[list.n - 1].off, {}, 1};
+    list.nPairs = n / 2;
+    for (int i = 0; i < list.nPairs; ++i) {
+        const Digits& a = taps[2 * i];
+        const Digits& b = taps[2 * i + 1];
+        LpcTapPair& pair = list.pairs[i];
+        pair.off0 = a.off;
+        pair.off1 = b.off;
+        pair.levels = std::max(a.levels, b.levels);
+        for (int k = 0; k < kLpcDigitLevels; ++k)
+            pair.d[k].fill(static_cast<std::int16_t>(
+                (static_cast<std::uint8_t>(b.d[k]) << 8) | static_cast<std::uint8_t>(a.d[k])));
+    }
+}
 
 LpcTapList lpcTapList(const LpcParams& p, const LpcGeometry& g, bool rowTaps)
 {
@@ -620,6 +679,7 @@ LpcTapList lpcTapList(const LpcParams& p, const LpcGeometry& g, bool rowTaps)
             ++list.n;
         }
     }
+    lpcPairTaps(list);
     return list;
 }
 
@@ -711,26 +771,46 @@ void lpcAccumulateSse2(const std::uint8_t* base, const LpcTapList& taps,
 #if (defined(__x86_64__) || defined(__i386__)) && \
     (defined(__GNUC__) || defined(__clang__)) && !defined(VC_DELTA3D_DISABLE_AVX2)
 #define VC_DELTA3D_LPC_AVX2 1
+// 8-bit multiply-add over the tap pairs, one digit level at a time; the
+// levels are recombined with shifts at the end (mod 2^16).
 __attribute__((target("avx2"))) void lpcAccumulateAvx2(
     const std::uint8_t* base, const LpcTapList& taps, std::uint16_t bias,
     std::uint16_t* acc, std::size_t n)
 {
-    __m256i w[kLpcTaps];
-    for (int t = 0; t < taps.n; ++t)
-        w[t] = _mm256_set1_epi16(static_cast<short>(taps.w[t]));
     lpcBlocks<32>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a)
                                     __attribute__((target("avx2"))) {
-        __m256i a0 = _mm256_set1_epi16(static_cast<short>(bias)), a1 = a0;
-        for (int t = 0; t < taps.n; ++t) {
-            const __m256i v = _mm256_loadu_si256(
-                reinterpret_cast<const __m256i*>(b + taps.off[t]));
-            a0 = _mm256_add_epi16(a0, _mm256_mullo_epi16(
-                _mm256_cvtepu8_epi16(_mm256_castsi256_si128(v)), w[t]));
-            a1 = _mm256_add_epi16(a1, _mm256_mullo_epi16(
-                _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 1)), w[t]));
+        // Unpacking interleaves within 128-bit lanes: the lo accumulators
+        // hold voxels 0-7 and 16-23, the hi ones 8-15 and 24-31.
+        __m256i lo0 = _mm256_set1_epi16(static_cast<short>(bias)), hi0 = lo0;
+        __m256i lo1 = _mm256_setzero_si256(), hi1 = lo1, lo2 = lo1, hi2 = lo1;
+        for (int i = 0; i < taps.nPairs; ++i) {
+            const LpcTapPair& pair = taps.pairs[i];
+            const auto* digits = reinterpret_cast<const __m256i*>(pair.d.data());
+            const __m256i v0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(b + pair.off0));
+            const __m256i v1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(b + pair.off1));
+            const __m256i vlo = _mm256_unpacklo_epi8(v0, v1);
+            const __m256i vhi = _mm256_unpackhi_epi8(v0, v1);
+            lo0 = _mm256_add_epi16(lo0, _mm256_maddubs_epi16(vlo, digits[0]));
+            hi0 = _mm256_add_epi16(hi0, _mm256_maddubs_epi16(vhi, digits[0]));
+            if (pair.levels > 1) {
+                lo1 = _mm256_add_epi16(lo1, _mm256_maddubs_epi16(vlo, digits[1]));
+                hi1 = _mm256_add_epi16(hi1, _mm256_maddubs_epi16(vhi, digits[1]));
+                if (pair.levels > 2) {
+                    lo2 = _mm256_add_epi16(lo2, _mm256_maddubs_epi16(vlo, digits[2]));
+                    hi2 = _mm256_add_epi16(hi2, _mm256_maddubs_epi16(vhi, digits[2]));
+                }
+            }
         }
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a), a0);
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a + 16), a1);
+        lo0 = _mm256_add_epi16(lo0, _mm256_add_epi16(_mm256_slli_epi16(lo1, 7),
+                                                     _mm256_slli_epi16(lo2, 14)));
+        hi0 = _mm256_add_epi16(hi0, _mm256_add_epi16(_mm256_slli_epi16(hi1, 7),
+                                                     _mm256_slli_epi16(hi2, 14)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a),
+                            _mm256_permute2x128_si256(lo0, hi0, 0x20));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a + 16),
+                            _mm256_permute2x128_si256(lo0, hi0, 0x31));
     });
 }
 

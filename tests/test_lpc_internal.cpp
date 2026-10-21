@@ -96,6 +96,7 @@ TEST_CASE("Every LPC kernel matches the scalar sum mod 2^16")
                 list.off[t] = std::uniform_int_distribution<int>(-600, 600)(rng);
                 list.w[t] = static_cast<std::uint16_t>(rng());
             }
+            vc_delta3d::lpcPairTaps(list);
             const auto bias = static_cast<std::uint16_t>(rng());
             const std::uint8_t* base = buf.data() + 1200;
             std::vector<std::uint16_t> expected(n);
