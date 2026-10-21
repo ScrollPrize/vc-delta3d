@@ -802,41 +802,95 @@ void lpcResiduals(const std::uint8_t* src, std::uint8_t* res,
         }
 }
 
-// Decoder: v holds residuals on entry and voxels on return. Rows are
-// reconstructed in raster order; within an interior row the taps on earlier
-// rows are summed vectorized, leaving only the two current-row taps in the
-// serial scan.
+// Decoder wavefront: kLpcWaveSlices consecutive slices are reconstructed
+// together, each kLpcWaveLag rows behind the one before it. A row reads at
+// most kLpcRadius rows ahead in earlier slices, so the rows of one wavefront
+// step only read finished voxels and their serial scans (one latency-bound
+// dependency chain per row) can be interleaved.
+constexpr std::size_t kLpcWaveSlices = 4;
+constexpr std::size_t kLpcWaveLag = kLpcRadius + 1;
+
+// Serial scan of M interior rows at once: acc holds each row's sum over the
+// taps on earlier rows, and the two current-row taps are added here.
+template <std::size_t M>
+inline void lpcScanRows(std::uint8_t* const* rows,
+                        const std::uint16_t* const* acc, std::size_t n,
+                        unsigned wWW, unsigned wW)
+{
+    // Carry the last two voxels in registers: rows is uint8_t, so stores to
+    // it would otherwise force reloads through memory on the critical path.
+    std::array<unsigned, M> p2, p1;
+    for (std::size_t m = 0; m < M; ++m) {
+        p2[m] = rows[m][-2];
+        p1[m] = rows[m][-1];
+    }
+    for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t m = 0; m < M; ++m) {
+            const auto s =
+                static_cast<std::uint16_t>(acc[m][i] + wWW * p2[m] + wW * p1[m]);
+            const auto value =
+                static_cast<std::uint8_t>(rows[m][i] + (s >> kLpcShift));
+            rows[m][i] = value;
+            p2[m] = p1[m];
+            p1[m] = value;
+        }
+}
+
+// Decoder: v holds residuals on entry and voxels on return. Within an
+// interior row the taps on earlier rows are summed vectorized, leaving only
+// the two current-row taps in the serial scan.
 void lpcReconstruct(std::uint8_t* v, const LpcGeometry& g, const LpcParams& p)
 {
     const LpcTapList taps = lpcTapList(p, g, false);
     std::vector<std::uint8_t> zeros(g.x, 0);
-    std::vector<std::uint16_t> acc(g.x);
-    const unsigned wWW = taps.wWW, wW = taps.wW;
-    for (std::size_t zz = 0; zz < g.z; ++zz)
-        for (std::size_t yy = 0; yy < g.y; ++yy) {
-            std::uint8_t* row = v + (zz * g.y + yy) * g.x;
-            const auto l = lorenzoRows(v, g, zz, yy, zeros.data());
-            std::size_t lo = g.x, hi = g.x;
-            if (g.interiorRow(zz, yy)) {
-                lo = kLpcRadius;
-                hi = g.x - kLpcRadius;
-            }
-            for (std::size_t xx = 0; xx < lo; ++xx)
-                row[xx] = static_cast<std::uint8_t>(
-                    row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
-            if (lo < hi) {
-                lpcAccumulate(row + lo, taps, p.bias, acc.data(), hi - lo);
-                for (std::size_t xx = lo; xx < hi; ++xx) {
-                    const auto s = static_cast<std::uint16_t>(
-                        acc[xx - lo] + wWW * row[xx - 2] + wW * row[xx - 1]);
-                    row[xx] =
-                        static_cast<std::uint8_t>(row[xx] + (s >> kLpcShift));
+    std::vector<std::uint16_t> accBuf(kLpcWaveSlices * g.x);
+    const std::size_t lo = kLpcRadius;
+    const std::size_t hi = g.x > 2 * kLpcRadius ? g.x - kLpcRadius : g.x;
+    auto lorenzo = [&](std::uint8_t* row, const LorenzoRows& l, std::size_t from,
+                       std::size_t to) {
+        for (std::size_t xx = from; xx < to; ++xx)
+            row[xx] = static_cast<std::uint8_t>(
+                row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
+    };
+    for (std::size_t z0 = 0; z0 < g.z; z0 += kLpcWaveSlices) {
+        const std::size_t slices = std::min(kLpcWaveSlices, g.z - z0);
+        for (std::size_t step = 0; step < g.y + (slices - 1) * kLpcWaveLag; ++step) {
+            std::uint8_t* rows[kLpcWaveSlices];
+            const std::uint16_t* acc[kLpcWaveSlices];
+            std::size_t m = 0;
+            for (std::size_t k = 0; k < slices; ++k) {
+                if (step < k * kLpcWaveLag || step - k * kLpcWaveLag >= g.y)
+                    continue;
+                const std::size_t zz = z0 + k, yy = step - k * kLpcWaveLag;
+                std::uint8_t* row = v + (zz * g.y + yy) * g.x;
+                const auto l = lorenzoRows(v, g, zz, yy, zeros.data());
+                if (!g.interiorRow(zz, yy)) {
+                    lorenzo(row, l, 0, g.x);
+                    continue;
                 }
+                lorenzo(row, l, 0, lo);
+                std::uint16_t* a = accBuf.data() + m * g.x;
+                lpcAccumulate(row + lo, taps, p.bias, a, hi - lo);
+                rows[m] = row + lo;
+                acc[m] = a;
+                ++m;
             }
-            for (std::size_t xx = hi; xx < g.x; ++xx)
-                row[xx] = static_cast<std::uint8_t>(
-                    row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
+            const std::size_t n = hi - lo;
+            switch (m) {
+            case 1: lpcScanRows<1>(rows, acc, n, taps.wWW, taps.wW); break;
+            case 2: lpcScanRows<2>(rows, acc, n, taps.wWW, taps.wW); break;
+            case 3: lpcScanRows<3>(rows, acc, n, taps.wWW, taps.wW); break;
+            case 4: lpcScanRows<4>(rows, acc, n, taps.wWW, taps.wW); break;
+            default: break;
+            }
+            for (std::size_t i = 0; i < m; ++i) {
+                std::uint8_t* row = rows[i] - lo;
+                const std::size_t r = static_cast<std::size_t>(row - v) / g.x;
+                lorenzo(row, lorenzoRows(v, g, r / g.y, r % g.y, zeros.data()),
+                        hi, g.x);
+            }
         }
+    }
 }
 
 // ---- LPC fit (encoder only; any weights decode correctly). ----
