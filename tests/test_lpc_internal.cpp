@@ -69,7 +69,7 @@ std::vector<std::pair<Kernel, std::size_t>> kernels()
     k.push_back({vc_delta3d::lpcAccumulateSse2, 16});
 #endif
 #if defined(VC_DELTA3D_LPC_NEON)
-    k.push_back({vc_delta3d::lpcAccumulateNeon, 16});
+    k.push_back({vc_delta3d::lpcAccumulateNeon, 32});
 #endif
 #if defined(VC_DELTA3D_LPC_AVX2)
     if (vc_delta3d::cpuHasAvx2())
@@ -96,7 +96,7 @@ TEST_CASE("Every LPC kernel matches the scalar sum mod 2^16")
                 list.off[t] = std::uniform_int_distribution<int>(-600, 600)(rng);
                 list.w[t] = static_cast<std::uint16_t>(rng());
             }
-            vc_delta3d::lpcPairTaps(list);
+            vc_delta3d::lpcPrepareTaps(list);
             const auto bias = static_cast<std::uint16_t>(rng());
             const std::uint8_t* base = buf.data() + 1200;
             std::vector<std::uint16_t> expected(n);

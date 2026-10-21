@@ -607,10 +607,22 @@ struct LpcTapPair {
     int levels = 1;
 };
 
+// One tap for a widening 8-bit multiply-accumulate kernel (NEON umlal/umlsl:
+// u16 += or -= u8 * u8). The weight's magnitude is split into bytes,
+// |w| = lo + 256 hi (mod 2^16): lo is applied with the widening multiply,
+// and hi, which only matters mod 256 once shifted up by 8, with a plain
+// 8-bit multiply-accumulate. Negative weights subtract. lo and hi are
+// repeated across a 128-bit vector so kernels load them without broadcasting.
+struct LpcByteTap {
+    alignas(16) std::array<std::uint8_t, 16> lo{};
+    std::array<std::uint8_t, 16> hi{};
+    std::ptrdiff_t off = 0;
+};
+
 // The selected taps of a chunk as offset/weight lists. With rowTaps false,
 // the two current-row taps are kept apart (wWW, wW) for the decoder's serial
-// scan and the list only reads earlier rows. pairs holds the same taps for
-// the 8-bit kernels (see lpcPairTaps).
+// scan and the list only reads earlier rows. pairs and bytes hold the same
+// taps for the 8-bit kernels (see lpcPrepareTaps).
 struct LpcTapList {
     std::array<std::ptrdiff_t, kLpcTaps> off{};
     std::array<std::uint16_t, kLpcTaps> w{};
@@ -618,6 +630,11 @@ struct LpcTapList {
     std::uint16_t wWW = 0, wW = 0;
     std::array<LpcTapPair, kLpcTaps / 2> pairs{};
     int nPairs = 0;
+    // bytes[0, nAdd) have positive weights, bytes[nAdd, nBytes) negative
+    // ones; within each group the nAddHigh / nSubHigh taps with hi != 0 come
+    // first.
+    std::array<LpcByteTap, kLpcTaps> bytes{};
+    int nBytes = 0, nAdd = 0, nAddHigh = 0, nSubHigh = 0;
 };
 
 // Fills list.pairs from off/w/n. Taps are paired in order of the digits they
@@ -662,6 +679,46 @@ void lpcPairTaps(LpcTapList& list)
     }
 }
 
+// Fills list.bytes from off/w/n, grouped as described at LpcTapList. Zero
+// weights are dropped.
+void lpcByteTaps(LpcTapList& list)
+{
+    std::array<LpcByteTap, kLpcTaps> add{}, addLow{}, sub{}, subLow{};
+    int nAdd = 0, nAddLow = 0, nSub = 0, nSubLow = 0;
+    for (int t = 0; t < list.n; ++t) {
+        const int w = static_cast<std::int16_t>(list.w[t]);
+        if (w == 0)
+            continue;
+        // |w| <= 32768: for w = -32768 the magnitude 0x8000 is still exact mod 2^16.
+        const auto m = static_cast<std::uint16_t>(w < 0 ? -w : w);
+        LpcByteTap tap;
+        tap.off = list.off[t];
+        tap.lo.fill(static_cast<std::uint8_t>(m));
+        tap.hi.fill(static_cast<std::uint8_t>(m >> 8));
+        const bool high = (m >> 8) != 0;
+        if (w > 0)
+            (high ? add[nAdd++] : addLow[nAddLow++]) = tap;
+        else
+            (high ? sub[nSub++] : subLow[nSubLow++]) = tap;
+    }
+    int i = 0;
+    for (int k = 0; k < nAdd; ++k) list.bytes[i++] = add[k];
+    for (int k = 0; k < nAddLow; ++k) list.bytes[i++] = addLow[k];
+    for (int k = 0; k < nSub; ++k) list.bytes[i++] = sub[k];
+    for (int k = 0; k < nSubLow; ++k) list.bytes[i++] = subLow[k];
+    list.nAdd = nAdd + nAddLow;
+    list.nAddHigh = nAdd;
+    list.nSubHigh = nSub;
+    list.nBytes = i;
+}
+
+// Prepares the 8-bit kernel views of a filled tap list.
+void lpcPrepareTaps(LpcTapList& list)
+{
+    lpcPairTaps(list);
+    lpcByteTaps(list);
+}
+
 LpcTapList lpcTapList(const LpcParams& p, const LpcGeometry& g, bool rowTaps)
 {
     LpcTapList list;
@@ -679,7 +736,7 @@ LpcTapList lpcTapList(const LpcParams& p, const LpcGeometry& g, bool rowTaps)
             ++list.n;
         }
     }
-    lpcPairTaps(list);
+    lpcPrepareTaps(list);
     return list;
 }
 
@@ -728,18 +785,50 @@ inline void lpcBlocks(const std::uint8_t* base, std::uint16_t* acc,
 
 #if defined(__aarch64__)
 #define VC_DELTA3D_LPC_NEON 1
+// Widening 8-bit multiply-accumulates over the byte taps, 32 voxels per
+// block in four 16-bit accumulators; the high bytes accumulate mod 256 in
+// two 8-bit accumulators and are added shifted up by 8 at the end.
 void lpcAccumulateNeon(const std::uint8_t* base, const LpcTapList& taps,
                        std::uint16_t bias, std::uint16_t* acc, std::size_t n)
 {
-    lpcBlocks<16>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a) {
-        uint16x8_t a0 = vdupq_n_u16(bias), a1 = a0;
-        for (int t = 0; t < taps.n; ++t) {
-            const uint8x16_t v = vld1q_u8(b + taps.off[t]);
-            a0 = vmlaq_n_u16(a0, vmovl_u8(vget_low_u8(v)), taps.w[t]);
-            a1 = vmlaq_n_u16(a1, vmovl_high_u8(v), taps.w[t]);
+    const LpcByteTap* add = taps.bytes.data();
+    const LpcByteTap* sub = add + taps.nAdd;
+    const int nSub = taps.nBytes - taps.nAdd;
+    lpcBlocks<32>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a) {
+        uint16x8_t l0 = vdupq_n_u16(bias), l1 = l0, l2 = l0, l3 = l0;
+        uint8x16_t h0 = vdupq_n_u8(0), h1 = h0;
+        for (int t = 0; t < taps.nAdd; ++t) {
+            const uint8x16_t v0 = vld1q_u8(b + add[t].off);
+            const uint8x16_t v1 = vld1q_u8(b + add[t].off + 16);
+            const uint8x16_t lo = vld1q_u8(add[t].lo.data());
+            l0 = vmlal_u8(l0, vget_low_u8(v0), vget_low_u8(lo));
+            l1 = vmlal_high_u8(l1, v0, lo);
+            l2 = vmlal_u8(l2, vget_low_u8(v1), vget_low_u8(lo));
+            l3 = vmlal_high_u8(l3, v1, lo);
+            if (t < taps.nAddHigh) {
+                const uint8x16_t hi = vld1q_u8(add[t].hi.data());
+                h0 = vmlaq_u8(h0, v0, hi);
+                h1 = vmlaq_u8(h1, v1, hi);
+            }
         }
-        vst1q_u16(a, a0);
-        vst1q_u16(a + 8, a1);
+        for (int t = 0; t < nSub; ++t) {
+            const uint8x16_t v0 = vld1q_u8(b + sub[t].off);
+            const uint8x16_t v1 = vld1q_u8(b + sub[t].off + 16);
+            const uint8x16_t lo = vld1q_u8(sub[t].lo.data());
+            l0 = vmlsl_u8(l0, vget_low_u8(v0), vget_low_u8(lo));
+            l1 = vmlsl_high_u8(l1, v0, lo);
+            l2 = vmlsl_u8(l2, vget_low_u8(v1), vget_low_u8(lo));
+            l3 = vmlsl_high_u8(l3, v1, lo);
+            if (t < taps.nSubHigh) {
+                const uint8x16_t hi = vld1q_u8(sub[t].hi.data());
+                h0 = vmlsq_u8(h0, v0, hi);
+                h1 = vmlsq_u8(h1, v1, hi);
+            }
+        }
+        vst1q_u16(a, vaddq_u16(l0, vshll_n_u8(vget_low_u8(h0), 8)));
+        vst1q_u16(a + 8, vaddq_u16(l1, vshll_high_n_u8(h0, 8)));
+        vst1q_u16(a + 16, vaddq_u16(l2, vshll_n_u8(vget_low_u8(h1), 8)));
+        vst1q_u16(a + 24, vaddq_u16(l3, vshll_high_n_u8(h1, 8)));
     });
 }
 #endif
@@ -833,7 +922,7 @@ void lpcAccumulate(const std::uint8_t* base, const LpcTapList& taps,
         return lpcAccumulateSse2(base, taps, bias, acc, n);
 #endif
 #if defined(VC_DELTA3D_LPC_NEON)
-    if (n >= 16)
+    if (n >= 32)
         return lpcAccumulateNeon(base, taps, bias, acc, n);
 #endif
     lpcAccumulateScalar(base, taps, bias, acc, n);
