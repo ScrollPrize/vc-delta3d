@@ -518,24 +518,471 @@ bool hasHeader(std::span<const std::byte> input,
            static_cast<unsigned char>(input[4]) == kFormatVersion;
 }
 
-// Header byte 7: bits 0-3 carry the rANS marker; bit 7 set means bits 4-6
-// carry the
-// delta-axis mask. Payloads from before per-chunk selection have bits 4-7
-// clear and imply full zyx; a clear flag with nonzero mask bits is invalid.
+// ---- LPC: per-chunk linear prediction over the 62 causal voxels of the
+// radius-2 box (see the layout notes in codec.hpp). Predictions use int32
+// sums of int16 weights times uint8 voxels; with |w| <= 2^15 and |bias| <=
+// 2^30 a sum stays below 2^31, so encoder and decoder agree exactly. ----
+
+constexpr int kLpcTaps = 62;
+constexpr std::size_t kLpcRadius = 2;
+constexpr int kLpcShift = 12;
+constexpr unsigned char kLpcStencilBox2 = 1;
+constexpr std::size_t kLpcParamBytes = 1 + 2 * kLpcTaps + 4;
+constexpr std::int32_t kLpcMaxBias = 1 << 30;
+
+struct LpcOffset {
+    int dz, dy, dx;
+};
+
+// Causal offsets in tap order. The two current-row taps come last (dx = -2,
+// then dx = -1), so the first kLpcTaps - 2 taps only read earlier rows.
+constexpr std::array<LpcOffset, kLpcTaps> lpcStencil()
+{
+    constexpr int r = static_cast<int>(kLpcRadius);
+    std::array<LpcOffset, kLpcTaps> taps{};
+    int n = 0;
+    for (int dz = -r; dz <= 0; ++dz)
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx)
+                if (dz < 0 || (dz == 0 && (dy < 0 || (dy == 0 && dx < 0))))
+                    taps[n++] = {dz, dy, dx};
+    return taps;
+}
+constexpr auto kLpcStencil = lpcStencil();
+constexpr int kLpcPrevTaps = kLpcTaps - 2;
+static_assert(kLpcStencil[kLpcTaps - 2].dz == 0 &&
+              kLpcStencil[kLpcTaps - 2].dy == 0 &&
+              kLpcStencil[kLpcTaps - 2].dx == -2);
+static_assert(kLpcStencil[kLpcTaps - 1].dx == -1);
+
+struct LpcParams {
+    std::array<std::int16_t, kLpcTaps> w;
+    std::int32_t bias;
+};
+
+struct LpcGeometry {
+    std::size_t z, y, x;
+    std::array<std::ptrdiff_t, kLpcTaps> off;  // flat offsets of the taps
+
+    LpcGeometry(std::size_t z_, std::size_t y_, std::size_t x_)
+        : z(z_), y(y_), x(x_)
+    {
+        const auto sy = static_cast<std::ptrdiff_t>(y);
+        const auto sx = static_cast<std::ptrdiff_t>(x);
+        for (int t = 0; t < kLpcTaps; ++t)
+            off[t] = (kLpcStencil[t].dz * sy + kLpcStencil[t].dy) * sx +
+                     kLpcStencil[t].dx;
+    }
+
+    // Rows whose voxels x in [2, X-2) use the linear predictor.
+    bool interiorRow(std::size_t zz, std::size_t yy) const
+    {
+        return zz >= kLpcRadius && yy >= kLpcRadius && yy + kLpcRadius < y &&
+               x > 2 * kLpcRadius;
+    }
+};
+
+// Clamped 3-D Lorenzo prediction for voxel xx of a row. n, u and nu are the
+// rows above, behind and above-behind (an all-zero row outside the chunk);
+// row[xx - 1] must already hold its final value.
+inline int lorenzoPredict(const std::uint8_t* row, const std::uint8_t* n,
+                          const std::uint8_t* u, const std::uint8_t* nu,
+                          std::size_t xx)
+{
+    int p = n[xx] + u[xx] - nu[xx];
+    if (xx > 0)
+        p += row[xx - 1] - n[xx - 1] - u[xx - 1] + nu[xx - 1];
+    return std::clamp(p, 0, 255);
+}
+
+// acc[i] = bias + sum over taps t < nTaps of w[t] * base[off[t] + i], for i
+// in [0, n). Integer sums are exact in any order, so the SIMD paths only
+// regroup the work: blocks of 16 voxels keep their four int32x4
+// accumulators in registers across all taps. A short final block overlaps
+// the previous one (recomputing a few sums) instead of falling back to
+// scalar code. nTaps must be even.
+#if defined(__aarch64__)
+#define VC_DELTA3D_LPC_SIMD 1
+inline void lpcAccumulateBlock(const std::uint8_t* base,
+                               const std::ptrdiff_t* off,
+                               const std::int16_t* w, int nTaps,
+                               std::int32_t bias, std::int32_t* acc)
+{
+    int32x4_t a0 = vdupq_n_s32(bias), a1 = a0, a2 = a0, a3 = a0;
+    for (int t = 0; t < nTaps; ++t) {
+        const uint8x16_t v = vld1q_u8(base + off[t]);
+        const int16x8_t lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v)));
+        const int16x8_t hi = vreinterpretq_s16_u16(vmovl_high_u8(v));
+        a0 = vmlal_n_s16(a0, vget_low_s16(lo), w[t]);
+        a1 = vmlal_high_n_s16(a1, lo, w[t]);
+        a2 = vmlal_n_s16(a2, vget_low_s16(hi), w[t]);
+        a3 = vmlal_high_n_s16(a3, hi, w[t]);
+    }
+    vst1q_s32(acc, a0);
+    vst1q_s32(acc + 4, a1);
+    vst1q_s32(acc + 8, a2);
+    vst1q_s32(acc + 12, a3);
+}
+#elif defined(__SSE2__)
+#define VC_DELTA3D_LPC_SIMD 1
+// Two taps per pmaddwd: voxels of taps t and t+1 are interleaved as int16
+// pairs and multiplied by the matching (w[t], w[t+1]) pair.
+inline void lpcAccumulateBlock(const std::uint8_t* base,
+                               const std::ptrdiff_t* off,
+                               const std::int16_t* w, int nTaps,
+                               std::int32_t bias, std::int32_t* acc)
+{
+    const __m128i zero = _mm_setzero_si128();
+    __m128i a0 = _mm_set1_epi32(bias), a1 = a0, a2 = a0, a3 = a0;
+    for (int t = 0; t < nTaps; t += 2) {
+        const __m128i va = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(base + off[t]));
+        const __m128i vb = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(base + off[t + 1]));
+        const __m128i wab = _mm_set1_epi32(static_cast<std::int32_t>(
+            (static_cast<std::uint32_t>(static_cast<std::uint16_t>(w[t + 1])) << 16) |
+            static_cast<std::uint16_t>(w[t])));
+        const __m128i aLo = _mm_unpacklo_epi8(va, zero);
+        const __m128i aHi = _mm_unpackhi_epi8(va, zero);
+        const __m128i bLo = _mm_unpacklo_epi8(vb, zero);
+        const __m128i bHi = _mm_unpackhi_epi8(vb, zero);
+        a0 = _mm_add_epi32(a0, _mm_madd_epi16(_mm_unpacklo_epi16(aLo, bLo), wab));
+        a1 = _mm_add_epi32(a1, _mm_madd_epi16(_mm_unpackhi_epi16(aLo, bLo), wab));
+        a2 = _mm_add_epi32(a2, _mm_madd_epi16(_mm_unpacklo_epi16(aHi, bHi), wab));
+        a3 = _mm_add_epi32(a3, _mm_madd_epi16(_mm_unpackhi_epi16(aHi, bHi), wab));
+    }
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc), a0);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 4), a1);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 8), a2);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 12), a3);
+}
+#endif
+
+void lpcAccumulate(const std::uint8_t* base,
+                   const std::ptrdiff_t* off,
+                   const std::int16_t* w,
+                   int nTaps,
+                   std::int32_t bias,
+                   std::int32_t* acc,
+                   std::size_t n)
+{
+#if defined(VC_DELTA3D_LPC_SIMD)
+    constexpr std::size_t kBlock = 16;
+    if (n >= kBlock) {
+        std::array<std::ptrdiff_t, kLpcTaps> o;
+        std::copy(off, off + nTaps, o.begin());
+        std::size_t i = 0;
+        for (; i + kBlock <= n; i += kBlock) {
+            lpcAccumulateBlock(base, o.data(), w, nTaps, bias, acc + i);
+            for (int t = 0; t < nTaps; ++t)
+                o[t] += kBlock;
+        }
+        if (i < n) {
+            const std::size_t back = kBlock - (n - i);
+            for (int t = 0; t < nTaps; ++t)
+                o[t] -= static_cast<std::ptrdiff_t>(back);
+            lpcAccumulateBlock(base, o.data(), w, nTaps, bias,
+                               acc + n - kBlock);
+        }
+        return;
+    }
+#endif
+    for (std::size_t i = 0; i < n; ++i)
+        acc[i] = bias;
+    for (int t = 0; t < nTaps; ++t) {
+        const std::uint8_t* s = base + off[t];
+        const std::int32_t wt = w[t];
+        for (std::size_t i = 0; i < n; ++i)
+            acc[i] += wt * s[i];
+    }
+}
+
+// Pointers to the Lorenzo neighbor rows of row (zz, yy).
+struct LorenzoRows {
+    const std::uint8_t *n, *u, *nu;
+};
+LorenzoRows lorenzoRows(const std::uint8_t* v, const LpcGeometry& g,
+                        std::size_t zz, std::size_t yy,
+                        const std::uint8_t* zeros)
+{
+    const std::uint8_t* row = v + (zz * g.y + yy) * g.x;
+    const std::size_t slice = g.y * g.x;
+    return {yy > 0 ? row - g.x : zeros, zz > 0 ? row - slice : zeros,
+            yy > 0 && zz > 0 ? row - slice - g.x : zeros};
+}
+
+// Encoder: residuals of src under the LPC predictor (src is left intact).
+void lpcResiduals(const std::uint8_t* src, std::uint8_t* res,
+                  const LpcGeometry& g, const LpcParams& p)
+{
+    std::vector<std::uint8_t> zeros(g.x, 0);
+    std::vector<std::int32_t> acc(g.x);
+    for (std::size_t zz = 0; zz < g.z; ++zz)
+        for (std::size_t yy = 0; yy < g.y; ++yy) {
+            const std::size_t r = (zz * g.y + yy) * g.x;
+            const std::uint8_t* row = src + r;
+            const auto l = lorenzoRows(src, g, zz, yy, zeros.data());
+            // Voxels [lo, hi) use the linear predictor, the rest Lorenzo.
+            std::size_t lo = g.x, hi = g.x;
+            if (g.interiorRow(zz, yy)) {
+                lo = kLpcRadius;
+                hi = g.x - kLpcRadius;
+                lpcAccumulate(row + lo, g.off.data(), p.w.data(), kLpcTaps,
+                              p.bias, acc.data(), hi - lo);
+                for (std::size_t xx = lo; xx < hi; ++xx)
+                    res[r + xx] = static_cast<std::uint8_t>(
+                        row[xx] - (acc[xx - lo] >> kLpcShift));
+            }
+            for (std::size_t xx = 0; xx < g.x; ++xx)
+                if (xx < lo || xx >= hi)
+                    res[r + xx] = static_cast<std::uint8_t>(
+                        row[xx] - lorenzoPredict(row, l.n, l.u, l.nu, xx));
+        }
+}
+
+// Decoder: v holds residuals on entry and voxels on return. Rows are
+// reconstructed in raster order; within an interior row the 60 taps on
+// earlier rows are summed vectorized, leaving only the two current-row taps
+// in the serial scan.
+void lpcReconstruct(std::uint8_t* v, const LpcGeometry& g, const LpcParams& p)
+{
+    std::vector<std::uint8_t> zeros(g.x, 0);
+    std::vector<std::int32_t> acc(g.x);
+    const std::int32_t wWW = p.w[kLpcTaps - 2];
+    const std::int32_t wW = p.w[kLpcTaps - 1];
+    for (std::size_t zz = 0; zz < g.z; ++zz)
+        for (std::size_t yy = 0; yy < g.y; ++yy) {
+            std::uint8_t* row = v + (zz * g.y + yy) * g.x;
+            const auto l = lorenzoRows(v, g, zz, yy, zeros.data());
+            std::size_t lo = g.x, hi = g.x;
+            if (g.interiorRow(zz, yy)) {
+                lo = kLpcRadius;
+                hi = g.x - kLpcRadius;
+            }
+            for (std::size_t xx = 0; xx < lo; ++xx)
+                row[xx] = static_cast<std::uint8_t>(
+                    row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
+            if (lo < hi) {
+                lpcAccumulate(row + lo, g.off.data(), p.w.data(), kLpcPrevTaps,
+                              p.bias, acc.data(), hi - lo);
+                for (std::size_t xx = lo; xx < hi; ++xx) {
+                    const std::int32_t s =
+                        acc[xx - lo] + wWW * row[xx - 2] + wW * row[xx - 1];
+                    row[xx] =
+                        static_cast<std::uint8_t>(row[xx] + (s >> kLpcShift));
+                }
+            }
+            for (std::size_t xx = hi; xx < g.x; ++xx)
+                row[xx] = static_cast<std::uint8_t>(
+                    row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
+        }
+}
+
+// Sum over i < n of a[i] * b[i] for uint8 rows (n < 66052, so no overflow).
+inline std::uint32_t dotU8(const std::uint8_t* a, const std::uint8_t* b,
+                           std::size_t n)
+{
+    std::uint32_t s = 0;
+    for (std::size_t i = 0; i < n; ++i)
+        s += static_cast<std::uint32_t>(a[i]) * b[i];
+    return s;
+}
+
+// Least-squares fit of the LPC weights and intercept on the interior voxels
+// of every `stride`-th row along z and y. The normal equations are
+// accumulated exactly in integers, as dot products between the sampled row
+// segments at each tap offset, so the fit does not depend on the platform.
+// Returns false if the quantized weights do not fit the format.
+bool lpcFit(const std::uint8_t* v, const LpcGeometry& g, std::size_t stride,
+            LpcParams& out)
+{
+    constexpr int kVec = kLpcTaps + 1;  // taps, then the target voxel
+    constexpr int k = kLpcTaps + 1;     // unknowns: weights, then intercept
+    std::array<std::ptrdiff_t, kVec> off{};
+    std::copy(g.off.begin(), g.off.end(), off.begin());
+    off[kLpcTaps] = 0;
+
+    std::vector<std::uint64_t> dot(kVec * kVec, 0);
+    std::array<std::uint64_t, kVec> sum{};
+    std::uint64_t count = 0;
+    const std::size_t n = g.x - 2 * kLpcRadius;
+    for (std::size_t zz = kLpcRadius; zz < g.z; zz += stride)
+        for (std::size_t yy = kLpcRadius; yy + kLpcRadius < g.y; yy += stride) {
+            const std::uint8_t* base = v + (zz * g.y + yy) * g.x + kLpcRadius;
+            for (int a = 0; a < kVec; ++a) {
+                const std::uint8_t* pa = base + off[a];
+                std::uint32_t s = 0;
+                for (std::size_t i = 0; i < n; ++i)
+                    s += pa[i];
+                sum[a] += s;
+                for (int b = a; b < kVec; ++b)
+                    dot[a * kVec + b] += dotU8(pa, base + off[b], n);
+            }
+            count += n;
+        }
+    if (count == 0)
+        return false;
+
+    // Augmented normal equations [G | rhs] for u = (taps..., 1) -> target.
+    std::vector<double> m(static_cast<std::size_t>(k) * (k + 1));
+    auto at = [&](int r, int c) -> double& { return m[r * (k + 1) + c]; };
+    for (int a = 0; a < kLpcTaps; ++a) {
+        for (int b = a; b < kLpcTaps; ++b)
+            at(a, b) = at(b, a) = static_cast<double>(dot[a * kVec + b]);
+        at(a, kLpcTaps) = at(kLpcTaps, a) = static_cast<double>(sum[a]);
+        at(a, k) = static_cast<double>(dot[a * kVec + kLpcTaps]);
+    }
+    at(kLpcTaps, kLpcTaps) = static_cast<double>(count);
+    at(kLpcTaps, k) = static_cast<double>(sum[kLpcTaps]);
+    // Ridge keeps degenerate chunks (constant, all zero) solvable.
+    for (int a = 0; a < k; ++a)
+        at(a, a) += 1e-6 * (1 + at(a, a));
+
+    // Gauss-Jordan elimination with partial pivoting.
+    for (int c = 0; c < k; ++c) {
+        int piv = c;
+        for (int r = c + 1; r < k; ++r)
+            if (std::fabs(at(r, c)) > std::fabs(at(piv, c)))
+                piv = r;
+        if (piv != c)
+            for (int cc = 0; cc <= k; ++cc)
+                std::swap(at(c, cc), at(piv, cc));
+        const double d = at(c, c);
+        if (d == 0)
+            continue;
+        for (int r = 0; r < k; ++r) {
+            if (r == c || at(r, c) == 0)
+                continue;
+            const double f = at(r, c) / d;
+            for (int cc = c; cc <= k; ++cc)
+                at(r, cc) -= f * at(c, cc);
+        }
+    }
+
+    constexpr double kScale = 1 << kLpcShift;
+    for (int a = 0; a < kLpcTaps; ++a) {
+        const double w = at(a, a) != 0 ? at(a, k) / at(a, a) : 0.0;
+        const double q = std::nearbyint(w * kScale);
+        if (!(q >= std::numeric_limits<std::int16_t>::min() &&
+              q <= std::numeric_limits<std::int16_t>::max()))
+            return false;
+        out.w[a] = static_cast<std::int16_t>(q);
+    }
+    const double c0 = at(kLpcTaps, kLpcTaps) != 0
+                          ? at(kLpcTaps, k) / at(kLpcTaps, kLpcTaps)
+                          : 0.0;
+    // The rounding half is folded into the bias, so ">> 12" rounds.
+    const double bias = std::nearbyint(c0 * kScale) + (1 << (kLpcShift - 1));
+    if (!(std::fabs(bias) <= kLpcMaxBias))
+        return false;
+    out.bias = static_cast<std::int32_t>(bias);
+    return true;
+}
+
+void writeLpcParams(std::byte* out, const LpcParams& p)
+{
+    out[0] = static_cast<std::byte>(kLpcStencilBox2);
+    for (int t = 0; t < kLpcTaps; ++t) {
+        const auto u = static_cast<std::uint16_t>(p.w[t]);
+        out[1 + 2 * t] = static_cast<std::byte>(u & 0xFF);
+        out[2 + 2 * t] = static_cast<std::byte>(u >> 8);
+    }
+    writeU32(out + 1 + 2 * kLpcTaps, static_cast<std::uint32_t>(p.bias));
+}
+
+std::optional<LpcParams> readLpcParams(std::span<const std::byte> in)
+{
+    if (in.size() < kLpcParamBytes ||
+        static_cast<unsigned char>(in[0]) != kLpcStencilBox2)
+        return std::nullopt;
+    LpcParams p;
+    for (int t = 0; t < kLpcTaps; ++t)
+        p.w[t] = static_cast<std::int16_t>(
+            static_cast<unsigned>(in[1 + 2 * t]) |
+            (static_cast<unsigned>(in[2 + 2 * t]) << 8));
+    p.bias = static_cast<std::int32_t>(readU32(in.data() + 1 + 2 * kLpcTaps));
+    if (p.bias > kLpcMaxBias || p.bias < -kLpcMaxBias)
+        return std::nullopt;
+    return p;
+}
+
+// Header byte 7: bits 0-3 carry the predictor marker. Delta payloads with
+// bit 7 set carry the delta-axis mask in bits 4-6; payloads from before
+// per-chunk selection have bits 4-7 clear and imply full zyx, and a clear
+// flag with nonzero mask bits is invalid. LPC payloads have bits 4-7 clear.
 struct HeaderByte {
+    Predictor predictor;
     unsigned mask;
     bool hasMask;
 };
 
 std::optional<HeaderByte> parseHeaderByte(unsigned char b)
 {
+    if ((b & 0x0F) == static_cast<unsigned>(Predictor::Lpc)) {
+        if ((b & 0xF0) != 0)
+            return std::nullopt;
+        return HeaderByte{Predictor::Lpc, 0, false};
+    }
     const bool hasMask = (b & 0x80) != 0;
-    if ((b & 0x0F) != 1 || (!hasMask && (b & 0x70) != 0))
+    if ((b & 0x0F) != static_cast<unsigned>(Predictor::Delta) ||
+        (!hasMask && (b & 0x70) != 0))
         return std::nullopt;
     HeaderByte out;
+    out.predictor = Predictor::Delta;
     out.hasMask = hasMask;
     out.mask = hasMask ? (b >> 4) & 7u : kDeltaMaskZyx;
     return out;
+}
+
+void writeHeader(std::vector<std::byte>& output, std::size_t elemSize,
+                 int quantBinWidth, unsigned predictorByte,
+                 std::size_t z, std::size_t y, std::size_t x)
+{
+    std::copy(kWireMagic.begin(), kWireMagic.end(), output.begin());
+    output[4] = static_cast<std::byte>(kFormatVersion);
+    output[5] = static_cast<std::byte>(elemSize);
+    output[6] = static_cast<std::byte>(quantBinWidth);
+    output[7] = static_cast<std::byte>(predictorByte);
+    writeU32(output.data() + 8, static_cast<std::uint32_t>(z));
+    writeU32(output.data() + 12, static_cast<std::uint32_t>(y));
+    writeU32(output.data() + 16, static_cast<std::uint32_t>(x));
+}
+
+// Row sampling stride of the LPC fit along z and y: the largest stride up to
+// 8 that still leaves kLpcFitSamples interior voxels (falling back to every
+// row). On 128^3 scroll chunks stride 8 fits as well as stride 4 (2.332 vs
+// 2.331 bits/voxel) at a quarter of the cost.
+constexpr std::size_t kLpcFitSamples = 16384;
+std::size_t lpcFitStride(const LpcGeometry& g)
+{
+    for (std::size_t s = 8; s > 1; --s) {
+        const std::size_t rows = ((g.z - kLpcRadius + s - 1) / s) *
+                                 ((g.y - 2 * kLpcRadius + s - 1) / s);
+        if (rows * (g.x - 2 * kLpcRadius) >= kLpcFitSamples)
+            return s;
+    }
+    return 1;
+}
+
+// LPC payload for a quantized uint8 chunk, or nothing if the fitted weights
+// do not fit the format.
+std::optional<std::vector<std::byte>> compressLpc(
+    const std::uint8_t* data, std::size_t z, std::size_t y, std::size_t x,
+    int quantBinWidth)
+{
+    const LpcGeometry g(z, y, x);
+    LpcParams params;
+    if (!lpcFit(data, g, lpcFitStride(g), params))
+        return std::nullopt;
+    std::vector<std::uint8_t> residuals(z * y * x);
+    lpcResiduals(data, residuals.data(), g, params);
+    auto output = ransCompressFrame(
+        {reinterpret_cast<const std::byte*>(residuals.data()), residuals.size()},
+        kHeaderSize + kLpcParamBytes);
+    writeHeader(output, 1, quantBinWidth,
+                static_cast<unsigned>(Predictor::Lpc), z, y, x);
+    writeLpcParams(output.data() + kHeaderSize, params);
+    return output;
 }
 
 } // namespace
@@ -543,7 +990,8 @@ std::optional<HeaderByte> parseHeaderByte(unsigned char b)
 std::vector<std::byte> compress(std::span<const std::byte> input,
                                 std::array<int, 3> shapeZYX,
                                 std::size_t elemSize,
-                                int quantBinWidth)
+                                int quantBinWidth,
+                                Predictor predictor)
 {
     const bool shapeValid =
         (elemSize == 1 || elemSize == 2) &&
@@ -568,6 +1016,12 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     std::vector<std::byte> filtered(input.begin(), input.end());
     quantize({filtered.data(), filtered.size()}, elemSize, quantBinWidth);
 
+    std::optional<std::vector<std::byte>> lpc;
+    if (predictor == Predictor::Lpc && elemSize == 1 &&
+        std::min({z, y, x}) >= static_cast<std::size_t>(kLpcMinDim))
+        lpc = compressLpc(reinterpret_cast<const std::uint8_t*>(filtered.data()),
+                          z, y, x, quantBinWidth);
+
     // The uint16 probe isn't implemented (16-bit volumes are rare in the
     // streaming path). Degenerate dims skip the probe; the extra passes are
     // no-ops there anyway.
@@ -585,15 +1039,21 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     const std::span<const std::byte> filteredSpan(filtered.data(),
                                                   filtered.size());
     auto output = ransCompressFrame(filteredSpan, kHeaderSize);
-    std::copy(kWireMagic.begin(), kWireMagic.end(), output.begin());
-    output[4] = static_cast<std::byte>(kFormatVersion);
-    output[5] = static_cast<std::byte>(elemSize);
-    output[6] = static_cast<std::byte>(quantBinWidth);
-    output[7] = static_cast<std::byte>(0x80u | (mask << 4) | 1u);
-    writeU32(output.data() + 8, static_cast<std::uint32_t>(z));
-    writeU32(output.data() + 12, static_cast<std::uint32_t>(y));
-    writeU32(output.data() + 16, static_cast<std::uint32_t>(x));
+    writeHeader(output, elemSize, quantBinWidth, 0x80u | (mask << 4) | 1u,
+                z, y, x);
+    if (lpc && lpc->size() < output.size())
+        return std::move(*lpc);
     return output;
+}
+
+std::optional<Predictor> predictor(std::span<const std::byte> input)
+{
+    if (!hasHeader(input, kWireMagic))
+        return std::nullopt;
+    const auto parsed = parseHeaderByte(static_cast<unsigned char>(input[7]));
+    if (!parsed)
+        return std::nullopt;
+    return parsed->predictor;
 }
 
 void quantize(std::span<std::byte> data,
@@ -650,6 +1110,19 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
     const auto parsed = parseHeaderByte(static_cast<unsigned char>(input[7]));
     if (!parsed)
         return false;
+
+    if (parsed->predictor == Predictor::Lpc) {
+        if (elemSize != 1)
+            return false;
+        const auto params = readLpcParams(input.subspan(kHeaderSize));
+        if (!params ||
+            !ransDecompressFrame(input.subspan(kHeaderSize + kLpcParamBytes),
+                                 output.data(), output.size()))
+            return false;
+        lpcReconstruct(reinterpret_cast<std::uint8_t*>(output.data()),
+                       LpcGeometry(z, y, x), *params);
+        return true;
+    }
 
     if (!ransDecompressFrame(input.subspan(kHeaderSize), output.data(),
                              output.size()))

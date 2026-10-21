@@ -1,5 +1,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
 
 #include <vc_delta3d/codec.hpp>
 
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace nb = nanobind;
@@ -35,6 +37,15 @@ std::span<const std::byte> bytesSpan(const nb::bytes& b)
     return {reinterpret_cast<const std::byte*>(b.c_str()), b.size()};
 }
 
+vc_delta3d::Predictor parsePredictor(const std::string& name)
+{
+    if (name == "delta")
+        return vc_delta3d::Predictor::Delta;
+    if (name == "lpc")
+        return vc_delta3d::Predictor::Lpc;
+    throw std::invalid_argument("predictor must be 'delta' or 'lpc'");
+}
+
 nb::bytes toBytes(const std::vector<std::byte>& v)
 {
     return nb::bytes(reinterpret_cast<const char*>(v.data()), v.size());
@@ -43,12 +54,14 @@ nb::bytes toBytes(const std::vector<std::byte>& v)
 nb::bytes compressSpan(std::span<const std::byte> input,
                        std::array<int, 3> shapeZYX,
                        std::size_t elemSize,
-                       int quant)
+                       int quant,
+                       const std::string& predictor)
 {
+    const auto pred = parsePredictor(predictor);
     std::vector<std::byte> out;
     {
         nb::gil_scoped_release release;
-        out = vc_delta3d::compress(input, shapeZYX, elemSize, quant);
+        out = vc_delta3d::compress(input, shapeZYX, elemSize, quant, pred);
     }
     return toBytes(out);
 }
@@ -56,7 +69,8 @@ nb::bytes compressSpan(std::span<const std::byte> input,
 template <typename T>
 nb::bytes compressArray(
     nb::ndarray<nb::numpy, const T, nb::ndim<3>, nb::c_contig> array,
-    int quant)
+    int quant,
+    const std::string& predictor)
 {
     const auto z = static_cast<int>(array.shape(0));
     const auto y = static_cast<int>(array.shape(1));
@@ -64,7 +78,7 @@ nb::bytes compressArray(
     const auto nbytes = static_cast<std::size_t>(array.size()) * sizeof(T);
     return compressSpan(
         {reinterpret_cast<const std::byte*>(array.data()), nbytes},
-        {z, y, x}, sizeof(T), quant);
+        {z, y, x}, sizeof(T), quant, predictor);
 }
 
 // Decodes straight into a freshly allocated bytes object, so the result is
@@ -117,16 +131,19 @@ NB_MODULE(_codec, m)
 
     m.def(
         "compress",
-        [](nb::bytes raw, int z, int y, int x, int elem_size, int quant) {
+        [](nb::bytes raw, int z, int y, int x, int elem_size, int quant,
+           const std::string& predictor) {
             return compressSpan(bytesSpan(raw), {z, y, x},
-                                static_cast<std::size_t>(elem_size), quant);
+                                static_cast<std::size_t>(elem_size), quant,
+                                predictor);
         },
-        "raw"_a, "z"_a, "y"_a, "x"_a, "elem_size"_a, "quant"_a = 1);
+        "raw"_a, "z"_a, "y"_a, "x"_a, "elem_size"_a, "quant"_a = 1,
+        "predictor"_a = "delta");
 
     m.def("compress_array", &compressArray<std::uint8_t>,
-          "array"_a, "quant"_a = 1);
+          "array"_a, "quant"_a = 1, "predictor"_a = "delta");
     m.def("compress_array", &compressArray<std::uint16_t>,
-          "array"_a, "quant"_a = 1);
+          "array"_a, "quant"_a = 1, "predictor"_a = "delta");
 
     m.def(
         "decompress",

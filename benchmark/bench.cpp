@@ -1,6 +1,6 @@
 // Benchmark VC-Delta3D on raw chunk files fetched by run.py.
 //
-// Usage: bench <level-dir> [reps]
+// Usage: bench <level-dir> [reps] [delta|lpc]
 //
 // <level-dir> must contain *.raw chunk files plus a shape.txt holding
 // "z y x elem_size" for every chunk in the directory. Reports the
@@ -27,11 +27,14 @@ static double now()
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: bench <level-dir> [reps]\n");
+        std::fprintf(stderr, "usage: bench <level-dir> [reps] [delta|lpc]\n");
         return 1;
     }
     const fs::path dir = argv[1];
     const int reps = argc > 2 ? std::atoi(argv[2]) : 5;
+    const auto predictor = argc > 3 && std::strcmp(argv[3], "lpc") == 0
+                               ? vc_delta3d::Predictor::Lpc
+                               : vc_delta3d::Predictor::Delta;
 
     int z = 0, y = 0, x = 0, elem = 0;
     {
@@ -66,11 +69,12 @@ int main(int argc, char** argv)
     }
 
     // Warmup pass that also verifies every chunk round-trips exactly.
-    std::size_t totalComp = 0;
+    std::size_t totalComp = 0, lpcChunks = 0;
     std::vector<std::vector<std::byte>> encoded;
     for (const auto& c : chunks) {
         auto enc = vc_delta3d::compress({c.data(), c.size()}, {z, y, x},
-                                        static_cast<std::size_t>(elem), 1);
+                                        static_cast<std::size_t>(elem), 1,
+                                        predictor);
         std::vector<std::byte> dec(N);
         if (!vc_delta3d::decompressInto({enc.data(), enc.size()},
                                         {dec.data(), dec.size()}) ||
@@ -80,6 +84,8 @@ int main(int argc, char** argv)
             return 1;
         }
         totalComp += enc.size();
+        lpcChunks += vc_delta3d::predictor({enc.data(), enc.size()}) ==
+                     vc_delta3d::Predictor::Lpc;
         encoded.push_back(std::move(enc));
     }
 
@@ -90,7 +96,8 @@ int main(int argc, char** argv)
         const double t0 = now();
         for (const auto& c : chunks) {
             auto enc = vc_delta3d::compress({c.data(), c.size()}, {z, y, x},
-                                            static_cast<std::size_t>(elem), 1);
+                                            static_cast<std::size_t>(elem), 1,
+                                        predictor);
             asm volatile("" ::"r"(enc.data()) : "memory");
         }
         bestEnc = std::min(bestEnc, now() - t0);
@@ -108,9 +115,9 @@ int main(int argc, char** argv)
     }
 
     std::printf("%-24s chunks=%-3zu shape=%dx%dx%d elem=%d ratio=%.3f "
-                "enc=%.1f MB/s dec=%.1f MB/s\n",
+                "enc=%.1f MB/s dec=%.1f MB/s lpc=%zu\n",
                 dir.filename().c_str(), chunks.size(), z, y, x, elem,
                 rawBytes / double(totalComp), rawBytes / bestEnc / 1e6,
-                rawBytes / bestDec / 1e6);
+                rawBytes / bestDec / 1e6, lpcChunks);
     return 0;
 }

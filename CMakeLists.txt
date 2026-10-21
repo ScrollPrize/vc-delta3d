@@ -16,6 +16,12 @@ set_target_properties(vc_delta3d PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 target_compile_features(vc_delta3d PUBLIC cxx_std_20)
+# The LPC fit solves its normal equations in double precision; no fused
+# multiply-adds keeps the fitted weights, and so the payload bytes, identical
+# across platforms (GCC contracts by default on aarch64).
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vc_delta3d PRIVATE -ffp-contract=off)
+endif()
 target_include_directories(vc_delta3d
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -51,6 +57,15 @@ if(VC_DELTA3D_BUILD_TESTS)
     target_include_directories(vc_delta3d_tests PRIVATE tests)
     target_link_libraries(vc_delta3d_tests PRIVATE vc_delta3d::vc_delta3d)
     add_test(NAME vc_delta3d_tests COMMAND vc_delta3d_tests)
+
+    # Includes src/codec.cpp to test LPC internals against the spec.
+    add_executable(vc_delta3d_lpc_tests tests/test_lpc_internal.cpp)
+    target_include_directories(vc_delta3d_lpc_tests PRIVATE tests include)
+    target_compile_features(vc_delta3d_lpc_tests PRIVATE cxx_std_20)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vc_delta3d_lpc_tests PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME vc_delta3d_lpc_tests COMMAND vc_delta3d_lpc_tests)
 endif()
 
 if(VC_DELTA3D_INSTALL_CPP)

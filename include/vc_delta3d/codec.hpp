@@ -38,18 +38,45 @@ namespace vc_delta3d {
 // recompression can tell what an existing payload already carries;
 // quantization is idempotent, so re-encoding at the same width is lossless.
 //
+// Instead of the delta filter, uint8 chunks can use a per-chunk linear
+// predictor (LPC, Predictor::Lpc): the encoder least-squares fits 62 weights
+// and an intercept over every causal voxel in the 5x5x5 box around a voxel,
+// and codes the prediction residuals with the same rANS frame. On scroll CT
+// it is ~18-25% smaller than the delta filter at full resolution, but encodes
+// and decodes several times slower. The encoder also builds the delta frame
+// and keeps whichever payload is smaller, so Lpc is never worse than Delta.
+//
 // D3D1 layout (all integers little-endian):
 //   0..3   magic 'D' '3' 'D' '1'
 //   4      format version (1)
 //   5      element size in bytes (1 or 2)
 //   6      quantization bin width (0 and 1 both mean lossless)
-//   7      bits 0-3: rANS marker (1). Bit 7 set means bits 4-6 record the
-//          delta-axis mask (bit 4 x, bit 5 y, bit 6 z). When bit 7 is clear,
-//          the filter is full zyx.
+//   7      bits 0-3: predictor marker, 1 = delta filter, 2 = LPC.
+//          Delta: bit 7 set means bits 4-6 record the delta-axis mask (bit 4
+//          x, bit 5 y, bit 6 z). When bit 7 is clear, the filter is full zyx.
+//          LPC: bits 4-7 are zero.
 //   8..19  chunk dims as three uint32: z, y, x (element counts)
-//   20..   256 uint16 symbol frequencies summing to 4096, then eight uint64
+//   20..   LPC only: the 129-byte parameter block below
+//   then   256 uint16 symbol frequencies summing to 4096, then eight uint64
 //          initial rANS states, then the rANS byte stream (decoded back to
 //          front by construction)
+//
+// LPC parameter block (element size must be 1):
+//   0      stencil id (1: the 62-tap causal box of radius 2)
+//   1..124 62 int16 weights in 1/4096 units, in tap order: dz = -2..0, then
+//          dy = -2..2, then dx = -2..2, keeping the causal offsets (dz < 0,
+//          or dz = 0 and dy < 0, or dz = 0, dy = 0 and dx < 0)
+//   125..  int32 bias in 1/4096 units, |bias| <= 2^30
+//
+// LPC residuals are r = (v - p) mod 256 in raster order (x fastest). Voxels
+// with z >= 2, 2 <= y < Y-2 and 2 <= x < X-2 are predicted as
+//   p = (bias + sum_i w_i * v[z+dz_i][y+dy_i][x+dx_i]) >> 12
+// (int32 arithmetic, arithmetic shift, no clamp). All other voxels use the
+// clamped Lorenzo prediction p = clamp(W + N + U - NW - WU - NU + NWU, 0,
+// 255), reading neighbors outside the chunk as 0.
+
+// Predictor applied before entropy coding (header byte 7, bits 0-3).
+enum class Predictor { Delta = 1, Lpc = 2 };
 
 // Zarr codec identifier.
 inline constexpr const char* kCodecId = "vc-delta3d";
@@ -67,6 +94,10 @@ inline constexpr int kQuantizationLossless = 1;
 inline constexpr int kQuantizationMaxError1 = 3;
 inline constexpr int kQuantizationMaxError2 = 5;
 
+// Smallest chunk edge for which Predictor::Lpc tries the linear predictor;
+// smaller chunks, and uint16 chunks, always use the delta filter.
+inline constexpr int kLpcMinDim = 16;
+
 // Compresses one decoded chunk of shapeZYX elements of elemSize bytes.
 // quantBinWidth 1 is lossless; larger widths quantize first (see above).
 // Throws std::invalid_argument unless input.size() equals z*y*x*elemSize
@@ -74,7 +105,12 @@ inline constexpr int kQuantizationMaxError2 = 5;
 std::vector<std::byte> compress(std::span<const std::byte> input,
                                 std::array<int, 3> shapeZYX,
                                 std::size_t elemSize,
-                                int quantBinWidth = kQuantizationLossless);
+                                int quantBinWidth = kQuantizationLossless,
+                                Predictor predictor = Predictor::Delta);
+
+// Predictor recorded in a D3D1 payload, or std::nullopt if input is not a
+// D3D1 payload.
+std::optional<Predictor> predictor(std::span<const std::byte> input);
 
 // In-place near-lossless quantization as applied by compress: snaps
 // each element to the nearest multiple of quantBinWidth (clamped to the

@@ -30,6 +30,18 @@ decoded = codec.decode(encoded)
 
 Importing `vc_delta3d` registers `vc-delta3d` with numcodecs.
 
+### Linear prediction (LPC)
+
+`Delta3D(predictor="lpc")` (C++: `vc_delta3d::Predictor::Lpc`) replaces the
+delta filter for uint8 chunks of at least 16 voxels per axis with a per-chunk
+least-squares linear predictor over the 62 causal neighbours in the 5x5x5 box.
+On scroll CT it makes full-resolution chunks ~20-25% smaller, at roughly 4x
+slower encode and decode. The encoder keeps the delta payload when it is
+smaller, and decoders need no configuration: the predictor is recorded in
+each chunk. In zarr metadata the codec reads
+`{"id": "vc-delta3d", "quant": 1, "predictor": "lpc"}`; older releases cannot
+decode LPC chunks.
+
 ## Build
 
 ```sh

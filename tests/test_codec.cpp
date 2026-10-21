@@ -1,4 +1,4 @@
-// VC-Delta3D codec coverage: D3D1 delta-zyx+rANS roundtrips and
+// VC-Delta3D codec coverage: D3D1 delta and LPC + rANS roundtrips and
 // corrupt/mismatched payload handling.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -6,7 +6,9 @@
 
 #include <vc_delta3d/codec.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -323,4 +325,145 @@ TEST_CASE("Alternate wire magic decodes without rewriting the input")
         asSpan(encoded), input.size(), alternateMagic);
     REQUIRE(allocated.has_value());
     CHECK(*allocated == input);
+}
+
+namespace {
+
+// Scroll-like uint8 chunk: smooth structure along all axes, noise, and a
+// masked-out (zero) region, so the LPC fit has something to predict and the
+// Lorenzo border, interior and masked voxels are all exercised.
+std::vector<std::byte> scrollLikeVolume(std::array<int, 3> shape, unsigned seed)
+{
+    std::vector<std::byte> bytes(
+        static_cast<std::size_t>(shape[0]) * shape[1] * shape[2]);
+    std::mt19937 rng(seed);
+    std::normal_distribution<double> noise(0.0, 4.0);
+    std::size_t i = 0;
+    for (int z = 0; z < shape[0]; ++z)
+        for (int y = 0; y < shape[1]; ++y)
+            for (int x = 0; x < shape[2]; ++x) {
+                double v = 120 + 60 * std::sin(0.21 * x + 0.13 * y) *
+                                     std::cos(0.17 * z) +
+                           noise(rng);
+                if (x + y > shape[1] + shape[2] - 12)
+                    v = 0;  // masked corner
+                bytes[i++] = static_cast<std::byte>(std::clamp(
+                    static_cast<int>(std::lround(v)), 0, 255));
+            }
+    return bytes;
+}
+
+} // namespace
+
+TEST_CASE("LPC roundtrips and beats the delta filter on smooth data")
+{
+    // At 16^3 the 129-byte parameter block and the Lorenzo border (half the
+    // voxels) cost more than the predictor saves; from ~20^3 LPC wins.
+    for (const auto shape : {std::array<int, 3>{20, 20, 20},
+                             std::array<int, 3>{17, 33, 20},
+                             std::array<int, 3>{64, 64, 64},
+                             std::array<int, 3>{20, 18, 130},
+                             std::array<int, 3>{40, 40, 18}}) {  // scalar rows
+        const auto input = scrollLikeVolume(shape, 3);
+        const auto delta = vc_delta3d::compress(asSpan(input), shape, 1);
+        const auto lpc = vc_delta3d::compress(
+            asSpan(input), shape, 1, vc_delta3d::kQuantizationLossless,
+            vc_delta3d::Predictor::Lpc);
+        CHECK(vc_delta3d::predictor(asSpan(lpc)) == vc_delta3d::Predictor::Lpc);
+        CHECK(lpc.size() < delta.size());
+        CHECK((static_cast<int>(lpc[7]) & 0xFF) == 2);
+        CHECK_FALSE(vc_delta3d::deltaMask(asSpan(lpc)).has_value());
+        const auto decoded = vc_delta3d::decompress(asSpan(lpc), input.size());
+        REQUIRE(decoded.has_value());
+        CHECK(*decoded == input);
+    }
+}
+
+TEST_CASE("LPC never produces a larger payload than the delta filter")
+{
+    // Noise, constant and all-zero chunks give LPC nothing to gain; the
+    // encoder must fall back to the delta payload, which still decodes.
+    const std::array<int, 3> shape{16, 16, 16};
+    const std::size_t n = 16 * 16 * 16;
+    std::mt19937 rng(5);
+    std::vector<std::byte> noise(n), constant(n, std::byte{77}),
+        zeros(n, std::byte{0});
+    for (auto& b : noise) b = static_cast<std::byte>(rng() & 0xFF);
+    for (const auto* input : {&noise, &constant, &zeros}) {
+        const auto delta = vc_delta3d::compress(asSpan(*input), shape, 1);
+        const auto lpc = vc_delta3d::compress(
+            asSpan(*input), shape, 1, vc_delta3d::kQuantizationLossless,
+            vc_delta3d::Predictor::Lpc);
+        CHECK(lpc.size() <= delta.size());
+        const auto decoded = vc_delta3d::decompress(asSpan(lpc), n);
+        REQUIRE(decoded.has_value());
+        CHECK(*decoded == *input);
+    }
+}
+
+TEST_CASE("LPC falls back to the delta filter where it does not apply")
+{
+    // uint16 chunks and chunks below kLpcMinDim along any axis.
+    const std::array<int, 3> small{15, 32, 32};
+    const auto input8 = scrollLikeVolume(small, 4);
+    const auto c8 = vc_delta3d::compress(
+        asSpan(input8), small, 1, vc_delta3d::kQuantizationLossless,
+        vc_delta3d::Predictor::Lpc);
+    CHECK(vc_delta3d::predictor(asSpan(c8)) == vc_delta3d::Predictor::Delta);
+
+    const std::array<int, 3> shape16{16, 16, 16};
+    const auto input16 = smoothVolume(shape16, 2);
+    const auto c16 = vc_delta3d::compress(
+        asSpan(input16), shape16, 2, vc_delta3d::kQuantizationLossless,
+        vc_delta3d::Predictor::Lpc);
+    CHECK(vc_delta3d::predictor(asSpan(c16)) == vc_delta3d::Predictor::Delta);
+    const auto decoded = vc_delta3d::decompress(asSpan(c16), input16.size());
+    REQUIRE(decoded.has_value());
+    CHECK(*decoded == input16);
+}
+
+TEST_CASE("LPC with near-lossless quantization bounds the error")
+{
+    const std::array<int, 3> shape{24, 24, 24};
+    const auto input = scrollLikeVolume(shape, 6);
+    const int width = vc_delta3d::kQuantizationMaxError1;
+    const auto compressed = vc_delta3d::compress(
+        asSpan(input), shape, 1, width, vc_delta3d::Predictor::Lpc);
+    CHECK(vc_delta3d::quantization(asSpan(compressed)) == width);
+    const auto decoded = vc_delta3d::decompress(asSpan(compressed), input.size());
+    REQUIRE(decoded.has_value());
+    auto expected = input;
+    vc_delta3d::quantize(expected, 1, width);
+    CHECK(*decoded == expected);
+}
+
+TEST_CASE("Corrupt LPC payloads return nullopt")
+{
+    const std::array<int, 3> shape{24, 24, 24};
+    const auto input = scrollLikeVolume(shape, 8);
+    const auto good = vc_delta3d::compress(
+        asSpan(input), shape, 1, vc_delta3d::kQuantizationLossless,
+        vc_delta3d::Predictor::Lpc);
+    REQUIRE(vc_delta3d::predictor(asSpan(good)) == vc_delta3d::Predictor::Lpc);
+    REQUIRE(vc_delta3d::decompress(asSpan(good), input.size()).has_value());
+
+    auto badStencil = good;
+    badStencil[20] = std::byte{9};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badStencil), input.size()).has_value());
+
+    // Bias beyond 2^30 could overflow the int32 prediction sums.
+    auto badBias = good;
+    badBias[20 + 125 + 3] = std::byte{0x7F};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badBias), input.size()).has_value());
+
+    // LPC marker with stray high bits, and an LPC payload claiming uint16.
+    auto badMarker = good;
+    badMarker[7] = std::byte{0x82};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMarker), input.size()).has_value());
+    auto badElem = good;
+    badElem[5] = std::byte{2};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badElem), 2 * input.size()).has_value());
+
+    std::vector<std::byte> truncated(good.begin(), good.begin() + 100);
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
 }
