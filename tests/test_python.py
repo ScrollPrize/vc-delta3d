@@ -61,7 +61,7 @@ def test_concurrent_roundtrip():
 
 
 # sha256 of the LPC payload of _scroll_like((32, 40, 36), 1).
-GOLDEN_LPC_SHA256 = "f118a1397c61557b85b45b2a47a2f9c75ee38bdf128eb78ec12ad02a1f7d818c"
+GOLDEN_LPC_SHA256 = "4bdada89217fc9a9a46299658b143beb7c9d08e3d5474436fd88efb8a0b4eb33"
 
 
 def _scroll_like(shape, seed):

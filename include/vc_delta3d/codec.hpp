@@ -39,12 +39,13 @@ namespace vc_delta3d {
 // quantization is idempotent, so re-encoding at the same width is lossless.
 //
 // Instead of the delta filter, uint8 chunks can use a per-chunk linear
-// predictor (LPC, Predictor::Lpc): the encoder least-squares fits 62 weights
-// and an intercept over every causal voxel in the 5x5x5 box around a voxel,
-// and codes the prediction residuals with the same rANS frame. On scroll CT
-// it is ~18-25% smaller than the delta filter at full resolution, but encodes
-// and decodes several times slower. The encoder also builds the delta frame
-// and keeps whichever payload is smaller, so Lpc is never worse than Delta.
+// predictor (LPC, Predictor::Lpc): the encoder picks 40 of the 62 causal
+// voxels in the 5x5x5 box around a voxel (greedy, per chunk), least-squares
+// fits their weights and an intercept, and codes the prediction residuals
+// with the same rANS frame. On scroll CT it is ~18-25% smaller than the delta
+// filter at full resolution, but encodes and decodes several times slower.
+// The encoder also builds the delta frame and keeps whichever payload is
+// smaller, so Lpc is never worse than Delta.
 //
 // D3D1 layout (all integers little-endian):
 //   0..3   magic 'D' '3' 'D' '1'
@@ -56,24 +57,28 @@ namespace vc_delta3d {
 //          x, bit 5 y, bit 6 z). When bit 7 is clear, the filter is full zyx.
 //          LPC: bits 4-7 are zero.
 //   8..19  chunk dims as three uint32: z, y, x (element counts)
-//   20..   LPC only: the 129-byte parameter block below
+//   20..   LPC only: the parameter block below (11 + 2 * taps bytes)
 //   then   256 uint16 symbol frequencies summing to 4096, then eight uint64
 //          initial rANS states, then the rANS byte stream (decoded back to
 //          front by construction)
 //
 // LPC parameter block (element size must be 1):
-//   0      stencil id (1: the 62-tap causal box of radius 2)
-//   1..124 62 int16 weights in 1/4096 units, in tap order: dz = -2..0, then
-//          dy = -2..2, then dx = -2..2, keeping the causal offsets (dz < 0,
-//          or dz = 0 and dy < 0, or dz = 0, dy = 0 and dx < 0)
-//   125..  int32 bias in 1/4096 units, |bias| <= 2^30
+//   0      stencil id (2: causal box of radius 2, weights in 1/256 units)
+//   1..8   uint64 tap mask: bit i set means tap i is used (bits 62-63 zero).
+//          Taps are numbered in the order dz = -2..0, then dy = -2..2, then
+//          dx = -2..2, keeping the causal offsets (dz < 0, or dz = 0 and
+//          dy < 0, or dz = 0, dy = 0 and dx < 0): 62 taps, the last two being
+//          (0, 0, -2) and (0, 0, -1)
+//   9..    one int16 weight per used tap, in tap order
+//   then   uint16 bias
 //
 // LPC residuals are r = (v - p) mod 256 in raster order (x fastest). Voxels
 // with z >= 2, 2 <= y < Y-2 and 2 <= x < X-2 are predicted as
-//   p = (bias + sum_i w_i * v[z+dz_i][y+dy_i][x+dx_i]) >> 12
-// (int32 arithmetic, arithmetic shift, no clamp). All other voxels use the
-// clamped Lorenzo prediction p = clamp(W + N + U - NW - WU - NU + NWU, 0,
-// 255), reading neighbors outside the chunk as 0.
+//   p = ((bias + sum over used taps i of w_i * v[z+dz_i][y+dy_i][x+dx_i])
+//        mod 2^16) >> 8
+// so any weights and bias are valid. All other voxels use the clamped Lorenzo
+// prediction p = clamp(W + N + U - NW - WU - NU + NWU, 0, 255), reading
+// neighbors outside the chunk as 0.
 
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
 enum class Predictor { Delta = 1, Lpc = 2 };

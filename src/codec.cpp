@@ -1,6 +1,7 @@
 #include <vc_delta3d/codec.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -13,8 +14,12 @@
 
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
-#elif defined(__SSE2__)
+#elif defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
+#endif
+#if (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+#include <immintrin.h>  // AVX2 LPC path, selected at run time
 #endif
 
 namespace vc_delta3d {
@@ -518,24 +523,29 @@ bool hasHeader(std::span<const std::byte> input,
            static_cast<unsigned char>(input[4]) == kFormatVersion;
 }
 
-// ---- LPC: per-chunk linear prediction over the 62 causal voxels of the
-// radius-2 box (see the layout notes in codec.hpp). Predictions use int32
-// sums of int16 weights times uint8 voxels; with |w| <= 2^15 and |bias| <=
-// 2^30 a sum stays below 2^31, so encoder and decoder agree exactly. ----
+// ---- LPC: per-chunk linear prediction from a per-chunk subset of the 62
+// causal voxels of the radius-2 box (see the layout notes in codec.hpp).
+// Weights are in 1/256 units and only bits 8-15 of a weighted sum form the
+// prediction (mod 256), so every sum is taken mod 2^16: encoder and decoder
+// agree exactly for any weights and bias, and the SIMD paths run on 16-bit
+// lanes. ----
 
 constexpr int kLpcTaps = 62;
 constexpr std::size_t kLpcRadius = 2;
-constexpr int kLpcShift = 12;
-constexpr unsigned char kLpcStencilBox2 = 1;
-constexpr std::size_t kLpcParamBytes = 1 + 2 * kLpcTaps + 4;
-constexpr std::int32_t kLpcMaxBias = 1 << 30;
+constexpr int kLpcShift = 8;
+constexpr unsigned char kLpcStencilBox2 = 2;
+// Stencil id, tap mask and bias; each selected tap adds a 2-byte weight.
+constexpr std::size_t kLpcFixedParamBytes = 1 + 8 + 2;
+// Taps the encoder keeps per chunk. Greedy selection of 40 out of 62 costs
+// ~0.15% size on 2.4um scroll chunks and saves a third of the decode sum.
+constexpr int kLpcSelectedTaps = 40;
 
 struct LpcOffset {
     int dz, dy, dx;
 };
 
 // Causal offsets in tap order. The two current-row taps come last (dx = -2,
-// then dx = -1), so the first kLpcTaps - 2 taps only read earlier rows.
+// then dx = -1); all others only read earlier rows.
 constexpr std::array<LpcOffset, kLpcTaps> lpcStencil()
 {
     constexpr int r = static_cast<int>(kLpcRadius);
@@ -549,15 +559,16 @@ constexpr std::array<LpcOffset, kLpcTaps> lpcStencil()
     return taps;
 }
 constexpr auto kLpcStencil = lpcStencil();
-constexpr int kLpcPrevTaps = kLpcTaps - 2;
-static_assert(kLpcStencil[kLpcTaps - 2].dz == 0 &&
-              kLpcStencil[kLpcTaps - 2].dy == 0 &&
-              kLpcStencil[kLpcTaps - 2].dx == -2);
-static_assert(kLpcStencil[kLpcTaps - 1].dx == -1);
+constexpr int kLpcTapWW = kLpcTaps - 2;
+constexpr int kLpcTapW = kLpcTaps - 1;
+static_assert(kLpcStencil[kLpcTapWW].dz == 0 && kLpcStencil[kLpcTapWW].dy == 0 &&
+              kLpcStencil[kLpcTapWW].dx == -2);
+static_assert(kLpcStencil[kLpcTapW].dx == -1);
 
 struct LpcParams {
-    std::array<std::int16_t, kLpcTaps> w;
-    std::int32_t bias;
+    std::uint64_t mask = 0;                  // bit t set: tap t is used
+    std::array<std::int16_t, kLpcTaps> w{};  // 1/256 units, 0 for unused taps
+    std::uint16_t bias = 0;                  // 1/256 units, rounding included
 };
 
 struct LpcGeometry {
@@ -582,6 +593,36 @@ struct LpcGeometry {
     }
 };
 
+// The selected taps of a chunk as offset/weight lists. With rowTaps false,
+// the two current-row taps are kept apart (wWW, wW) for the decoder's serial
+// scan and the list only reads earlier rows.
+struct LpcTapList {
+    std::array<std::ptrdiff_t, kLpcTaps> off{};
+    std::array<std::uint16_t, kLpcTaps> w{};
+    int n = 0;
+    std::uint16_t wWW = 0, wW = 0;
+};
+
+LpcTapList lpcTapList(const LpcParams& p, const LpcGeometry& g, bool rowTaps)
+{
+    LpcTapList list;
+    for (int t = 0; t < kLpcTaps; ++t) {
+        if (!((p.mask >> t) & 1))
+            continue;
+        const auto w = static_cast<std::uint16_t>(p.w[t]);
+        if (!rowTaps && t == kLpcTapWW) {
+            list.wWW = w;
+        } else if (!rowTaps && t == kLpcTapW) {
+            list.wW = w;
+        } else {
+            list.off[list.n] = g.off[t];
+            list.w[list.n] = w;
+            ++list.n;
+        }
+    }
+    return list;
+}
+
 // Clamped 3-D Lorenzo prediction for voxel xx of a row. n, u and nu are the
 // rows above, behind and above-behind (an all-zero row outside the chunk);
 // row[xx - 1] must already hold its final value.
@@ -595,106 +636,127 @@ inline int lorenzoPredict(const std::uint8_t* row, const std::uint8_t* n,
     return std::clamp(p, 0, 255);
 }
 
-// acc[i] = bias + sum over taps t < nTaps of w[t] * base[off[t] + i], for i
-// in [0, n). Integer sums are exact in any order, so the SIMD paths only
-// regroup the work: blocks of 16 voxels keep their four int32x4
-// accumulators in registers across all taps. A short final block overlaps
-// the previous one (recomputing a few sums) instead of falling back to
-// scalar code. nTaps must be even.
-#if defined(__aarch64__)
-#define VC_DELTA3D_LPC_SIMD 1
-inline void lpcAccumulateBlock(const std::uint8_t* base,
-                               const std::ptrdiff_t* off,
-                               const std::int16_t* w, int nTaps,
-                               std::int32_t bias, std::int32_t* acc)
+// acc[i] = bias + sum over the taps of w[t] * base[off[t] + i] (mod 2^16),
+// for i in [0, n). The sum is exact in any order, so the SIMD paths only
+// regroup it: fixed-width blocks keep their 16-bit accumulators in registers
+// across all taps, and a short final block overlaps the previous one
+// (recomputing a few sums) instead of falling back to scalar code.
+void lpcAccumulateScalar(const std::uint8_t* base, const LpcTapList& taps,
+                         std::uint16_t bias, std::uint16_t* acc, std::size_t n)
 {
-    int32x4_t a0 = vdupq_n_s32(bias), a1 = a0, a2 = a0, a3 = a0;
-    for (int t = 0; t < nTaps; ++t) {
-        const uint8x16_t v = vld1q_u8(base + off[t]);
-        const int16x8_t lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v)));
-        const int16x8_t hi = vreinterpretq_s16_u16(vmovl_high_u8(v));
-        a0 = vmlal_n_s16(a0, vget_low_s16(lo), w[t]);
-        a1 = vmlal_high_n_s16(a1, lo, w[t]);
-        a2 = vmlal_n_s16(a2, vget_low_s16(hi), w[t]);
-        a3 = vmlal_high_n_s16(a3, hi, w[t]);
+    for (std::size_t i = 0; i < n; ++i)
+        acc[i] = bias;
+    for (int t = 0; t < taps.n; ++t) {
+        const std::uint8_t* s = base + taps.off[t];
+        const unsigned w = taps.w[t];
+        for (std::size_t i = 0; i < n; ++i)
+            acc[i] = static_cast<std::uint16_t>(acc[i] + w * s[i]);
     }
-    vst1q_s32(acc, a0);
-    vst1q_s32(acc + 4, a1);
-    vst1q_s32(acc + 8, a2);
-    vst1q_s32(acc + 12, a3);
 }
-#elif defined(__SSE2__)
-#define VC_DELTA3D_LPC_SIMD 1
-// Two taps per pmaddwd: voxels of taps t and t+1 are interleaved as int16
-// pairs and multiplied by the matching (w[t], w[t+1]) pair.
-inline void lpcAccumulateBlock(const std::uint8_t* base,
-                               const std::ptrdiff_t* off,
-                               const std::int16_t* w, int nTaps,
-                               std::int32_t bias, std::int32_t* acc)
+
+// Runs block(base + i, acc + i) over [0, n) in steps of kBlock (n >= kBlock).
+template <std::size_t kBlock, typename Block>
+inline void lpcBlocks(const std::uint8_t* base, std::uint16_t* acc,
+                      std::size_t n, Block block)
 {
-    const __m128i zero = _mm_setzero_si128();
-    __m128i a0 = _mm_set1_epi32(bias), a1 = a0, a2 = a0, a3 = a0;
-    for (int t = 0; t < nTaps; t += 2) {
-        const __m128i va = _mm_loadu_si128(
-            reinterpret_cast<const __m128i*>(base + off[t]));
-        const __m128i vb = _mm_loadu_si128(
-            reinterpret_cast<const __m128i*>(base + off[t + 1]));
-        const __m128i wab = _mm_set1_epi32(static_cast<std::int32_t>(
-            (static_cast<std::uint32_t>(static_cast<std::uint16_t>(w[t + 1])) << 16) |
-            static_cast<std::uint16_t>(w[t])));
-        const __m128i aLo = _mm_unpacklo_epi8(va, zero);
-        const __m128i aHi = _mm_unpackhi_epi8(va, zero);
-        const __m128i bLo = _mm_unpacklo_epi8(vb, zero);
-        const __m128i bHi = _mm_unpackhi_epi8(vb, zero);
-        a0 = _mm_add_epi32(a0, _mm_madd_epi16(_mm_unpacklo_epi16(aLo, bLo), wab));
-        a1 = _mm_add_epi32(a1, _mm_madd_epi16(_mm_unpackhi_epi16(aLo, bLo), wab));
-        a2 = _mm_add_epi32(a2, _mm_madd_epi16(_mm_unpacklo_epi16(aHi, bHi), wab));
-        a3 = _mm_add_epi32(a3, _mm_madd_epi16(_mm_unpackhi_epi16(aHi, bHi), wab));
-    }
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc), a0);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 4), a1);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 8), a2);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(acc + 12), a3);
+    std::size_t i = 0;
+    for (; i + kBlock <= n; i += kBlock)
+        block(base + i, acc + i);
+    if (i < n)
+        block(base + n - kBlock, acc + n - kBlock);
+}
+
+#if defined(__aarch64__)
+#define VC_DELTA3D_LPC_NEON 1
+void lpcAccumulateNeon(const std::uint8_t* base, const LpcTapList& taps,
+                       std::uint16_t bias, std::uint16_t* acc, std::size_t n)
+{
+    lpcBlocks<16>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a) {
+        uint16x8_t a0 = vdupq_n_u16(bias), a1 = a0;
+        for (int t = 0; t < taps.n; ++t) {
+            const uint8x16_t v = vld1q_u8(b + taps.off[t]);
+            a0 = vmlaq_n_u16(a0, vmovl_u8(vget_low_u8(v)), taps.w[t]);
+            a1 = vmlaq_n_u16(a1, vmovl_high_u8(v), taps.w[t]);
+        }
+        vst1q_u16(a, a0);
+        vst1q_u16(a + 8, a1);
+    });
 }
 #endif
 
-void lpcAccumulate(const std::uint8_t* base,
-                   const std::ptrdiff_t* off,
-                   const std::int16_t* w,
-                   int nTaps,
-                   std::int32_t bias,
-                   std::int32_t* acc,
-                   std::size_t n)
+#if defined(__SSE2__) || defined(_M_X64)
+#define VC_DELTA3D_LPC_SSE2 1
+void lpcAccumulateSse2(const std::uint8_t* base, const LpcTapList& taps,
+                       std::uint16_t bias, std::uint16_t* acc, std::size_t n)
 {
-#if defined(VC_DELTA3D_LPC_SIMD)
-    constexpr std::size_t kBlock = 16;
-    if (n >= kBlock) {
-        std::array<std::ptrdiff_t, kLpcTaps> o;
-        std::copy(off, off + nTaps, o.begin());
-        std::size_t i = 0;
-        for (; i + kBlock <= n; i += kBlock) {
-            lpcAccumulateBlock(base, o.data(), w, nTaps, bias, acc + i);
-            for (int t = 0; t < nTaps; ++t)
-                o[t] += kBlock;
+    const __m128i zero = _mm_setzero_si128();
+    lpcBlocks<16>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a) {
+        __m128i a0 = _mm_set1_epi16(static_cast<short>(bias)), a1 = a0;
+        for (int t = 0; t < taps.n; ++t) {
+            const __m128i v = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(b + taps.off[t]));
+            const __m128i w = _mm_set1_epi16(static_cast<short>(taps.w[t]));
+            a0 = _mm_add_epi16(a0, _mm_mullo_epi16(_mm_unpacklo_epi8(v, zero), w));
+            a1 = _mm_add_epi16(a1, _mm_mullo_epi16(_mm_unpackhi_epi8(v, zero), w));
         }
-        if (i < n) {
-            const std::size_t back = kBlock - (n - i);
-            for (int t = 0; t < nTaps; ++t)
-                o[t] -= static_cast<std::ptrdiff_t>(back);
-            lpcAccumulateBlock(base, o.data(), w, nTaps, bias,
-                               acc + n - kBlock);
-        }
-        return;
-    }
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(a), a0);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(a + 8), a1);
+    });
+}
 #endif
-    for (std::size_t i = 0; i < n; ++i)
-        acc[i] = bias;
-    for (int t = 0; t < nTaps; ++t) {
-        const std::uint8_t* s = base + off[t];
-        const std::int32_t wt = w[t];
-        for (std::size_t i = 0; i < n; ++i)
-            acc[i] += wt * s[i];
-    }
+
+// AVX2 is chosen at run time (GCC/Clang), so baseline x86-64 builds such as
+// the published wheels still use it where the CPU has it. Define
+// VC_DELTA3D_DISABLE_AVX2 to compare against the SSE2 path.
+#if (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && !defined(VC_DELTA3D_DISABLE_AVX2)
+#define VC_DELTA3D_LPC_AVX2 1
+__attribute__((target("avx2"))) void lpcAccumulateAvx2(
+    const std::uint8_t* base, const LpcTapList& taps, std::uint16_t bias,
+    std::uint16_t* acc, std::size_t n)
+{
+    __m256i w[kLpcTaps];
+    for (int t = 0; t < taps.n; ++t)
+        w[t] = _mm256_set1_epi16(static_cast<short>(taps.w[t]));
+    lpcBlocks<32>(base, acc, n, [&](const std::uint8_t* b, std::uint16_t* a)
+                                    __attribute__((target("avx2"))) {
+        __m256i a0 = _mm256_set1_epi16(static_cast<short>(bias)), a1 = a0;
+        for (int t = 0; t < taps.n; ++t) {
+            const __m256i v = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(b + taps.off[t]));
+            a0 = _mm256_add_epi16(a0, _mm256_mullo_epi16(
+                _mm256_cvtepu8_epi16(_mm256_castsi256_si128(v)), w[t]));
+            a1 = _mm256_add_epi16(a1, _mm256_mullo_epi16(
+                _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 1)), w[t]));
+        }
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a), a0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(a + 16), a1);
+    });
+}
+
+bool cpuHasAvx2()
+{
+    static const bool has = __builtin_cpu_supports("avx2");
+    return has;
+}
+#endif
+
+void lpcAccumulate(const std::uint8_t* base, const LpcTapList& taps,
+                   std::uint16_t bias, std::uint16_t* acc, std::size_t n)
+{
+#if defined(VC_DELTA3D_LPC_AVX2)
+    if (n >= 32 && cpuHasAvx2())
+        return lpcAccumulateAvx2(base, taps, bias, acc, n);
+#endif
+#if defined(VC_DELTA3D_LPC_SSE2)
+    if (n >= 16)
+        return lpcAccumulateSse2(base, taps, bias, acc, n);
+#endif
+#if defined(VC_DELTA3D_LPC_NEON)
+    if (n >= 16)
+        return lpcAccumulateNeon(base, taps, bias, acc, n);
+#endif
+    lpcAccumulateScalar(base, taps, bias, acc, n);
 }
 
 // Pointers to the Lorenzo neighbor rows of row (zz, yy).
@@ -715,8 +777,9 @@ LorenzoRows lorenzoRows(const std::uint8_t* v, const LpcGeometry& g,
 void lpcResiduals(const std::uint8_t* src, std::uint8_t* res,
                   const LpcGeometry& g, const LpcParams& p)
 {
+    const LpcTapList taps = lpcTapList(p, g, true);
     std::vector<std::uint8_t> zeros(g.x, 0);
-    std::vector<std::int32_t> acc(g.x);
+    std::vector<std::uint16_t> acc(g.x);
     for (std::size_t zz = 0; zz < g.z; ++zz)
         for (std::size_t yy = 0; yy < g.y; ++yy) {
             const std::size_t r = (zz * g.y + yy) * g.x;
@@ -727,8 +790,7 @@ void lpcResiduals(const std::uint8_t* src, std::uint8_t* res,
             if (g.interiorRow(zz, yy)) {
                 lo = kLpcRadius;
                 hi = g.x - kLpcRadius;
-                lpcAccumulate(row + lo, g.off.data(), p.w.data(), kLpcTaps,
-                              p.bias, acc.data(), hi - lo);
+                lpcAccumulate(row + lo, taps, p.bias, acc.data(), hi - lo);
                 for (std::size_t xx = lo; xx < hi; ++xx)
                     res[r + xx] = static_cast<std::uint8_t>(
                         row[xx] - (acc[xx - lo] >> kLpcShift));
@@ -741,15 +803,15 @@ void lpcResiduals(const std::uint8_t* src, std::uint8_t* res,
 }
 
 // Decoder: v holds residuals on entry and voxels on return. Rows are
-// reconstructed in raster order; within an interior row the 60 taps on
-// earlier rows are summed vectorized, leaving only the two current-row taps
-// in the serial scan.
+// reconstructed in raster order; within an interior row the taps on earlier
+// rows are summed vectorized, leaving only the two current-row taps in the
+// serial scan.
 void lpcReconstruct(std::uint8_t* v, const LpcGeometry& g, const LpcParams& p)
 {
+    const LpcTapList taps = lpcTapList(p, g, false);
     std::vector<std::uint8_t> zeros(g.x, 0);
-    std::vector<std::int32_t> acc(g.x);
-    const std::int32_t wWW = p.w[kLpcTaps - 2];
-    const std::int32_t wW = p.w[kLpcTaps - 1];
+    std::vector<std::uint16_t> acc(g.x);
+    const unsigned wWW = taps.wWW, wW = taps.wW;
     for (std::size_t zz = 0; zz < g.z; ++zz)
         for (std::size_t yy = 0; yy < g.y; ++yy) {
             std::uint8_t* row = v + (zz * g.y + yy) * g.x;
@@ -763,11 +825,10 @@ void lpcReconstruct(std::uint8_t* v, const LpcGeometry& g, const LpcParams& p)
                 row[xx] = static_cast<std::uint8_t>(
                     row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
             if (lo < hi) {
-                lpcAccumulate(row + lo, g.off.data(), p.w.data(), kLpcPrevTaps,
-                              p.bias, acc.data(), hi - lo);
+                lpcAccumulate(row + lo, taps, p.bias, acc.data(), hi - lo);
                 for (std::size_t xx = lo; xx < hi; ++xx) {
-                    const std::int32_t s =
-                        acc[xx - lo] + wWW * row[xx - 2] + wW * row[xx - 1];
+                    const auto s = static_cast<std::uint16_t>(
+                        acc[xx - lo] + wWW * row[xx - 2] + wW * row[xx - 1]);
                     row[xx] =
                         static_cast<std::uint8_t>(row[xx] + (s >> kLpcShift));
                 }
@@ -777,6 +838,8 @@ void lpcReconstruct(std::uint8_t* v, const LpcGeometry& g, const LpcParams& p)
                     row[xx] + lorenzoPredict(row, l.n, l.u, l.nu, xx));
         }
 }
+
+// ---- LPC fit (encoder only; any weights decode correctly). ----
 
 // Sum over i < n of a[i] * b[i] for uint8 rows (n < 66052, so no overflow).
 inline std::uint32_t dotU8(const std::uint8_t* a, const std::uint8_t* b,
@@ -788,16 +851,23 @@ inline std::uint32_t dotU8(const std::uint8_t* a, const std::uint8_t* b,
     return s;
 }
 
-// Least-squares fit of the LPC weights and intercept on the interior voxels
-// of every `stride`-th row along z and y. The normal equations are
-// accumulated exactly in integers, as dot products between the sampled row
-// segments at each tap offset, so the fit does not depend on the platform.
-// Returns false if the quantized weights do not fit the format.
-bool lpcFit(const std::uint8_t* v, const LpcGeometry& g, std::size_t stride,
-            LpcParams& out)
+// Normal equations of the least-squares fit, unknowns = 62 tap weights then
+// the intercept (index kLpcTaps).
+constexpr int kLpcUnknowns = kLpcTaps + 1;
+struct LpcNormal {
+    std::array<double, kLpcUnknowns * kLpcUnknowns> a;
+    std::array<double, kLpcUnknowns> b;
+    double at(int r, int c) const { return a[r * kLpcUnknowns + c]; }
+};
+
+// Accumulates the normal equations over the interior voxels of every
+// `stride`-th row along z and y, exactly in integers (dot products between
+// the sampled row segments at each tap offset), so the fit does not depend on
+// the platform. Returns false if there are no interior voxels.
+bool lpcNormalEquations(const std::uint8_t* v, const LpcGeometry& g,
+                        std::size_t stride, LpcNormal& ne)
 {
     constexpr int kVec = kLpcTaps + 1;  // taps, then the target voxel
-    constexpr int k = kLpcTaps + 1;     // unknowns: weights, then intercept
     std::array<std::ptrdiff_t, kVec> off{};
     std::copy(g.off.begin(), g.off.end(), off.begin());
     off[kLpcTaps] = 0;
@@ -823,86 +893,212 @@ bool lpcFit(const std::uint8_t* v, const LpcGeometry& g, std::size_t stride,
     if (count == 0)
         return false;
 
-    // Augmented normal equations [G | rhs] for u = (taps..., 1) -> target.
-    std::vector<double> m(static_cast<std::size_t>(k) * (k + 1));
-    auto at = [&](int r, int c) -> double& { return m[r * (k + 1) + c]; };
+    constexpr int k = kLpcUnknowns;
     for (int a = 0; a < kLpcTaps; ++a) {
         for (int b = a; b < kLpcTaps; ++b)
-            at(a, b) = at(b, a) = static_cast<double>(dot[a * kVec + b]);
-        at(a, kLpcTaps) = at(kLpcTaps, a) = static_cast<double>(sum[a]);
-        at(a, k) = static_cast<double>(dot[a * kVec + kLpcTaps]);
+            ne.a[a * k + b] = ne.a[b * k + a] =
+                static_cast<double>(dot[a * kVec + b]);
+        ne.a[a * k + kLpcTaps] = ne.a[kLpcTaps * k + a] =
+            static_cast<double>(sum[a]);
+        ne.b[a] = static_cast<double>(dot[a * kVec + kLpcTaps]);
     }
-    at(kLpcTaps, kLpcTaps) = static_cast<double>(count);
-    at(kLpcTaps, k) = static_cast<double>(sum[kLpcTaps]);
-    // Ridge keeps degenerate chunks (constant, all zero) solvable.
+    ne.a[kLpcTaps * k + kLpcTaps] = static_cast<double>(count);
+    ne.b[kLpcTaps] = static_cast<double>(sum[kLpcTaps]);
+    // Ridge keeps degenerate chunks (constant, all zero) positive definite.
     for (int a = 0; a < k; ++a)
-        at(a, a) += 1e-6 * (1 + at(a, a));
-
-    // Gauss-Jordan elimination with partial pivoting.
-    for (int c = 0; c < k; ++c) {
-        int piv = c;
-        for (int r = c + 1; r < k; ++r)
-            if (std::fabs(at(r, c)) > std::fabs(at(piv, c)))
-                piv = r;
-        if (piv != c)
-            for (int cc = 0; cc <= k; ++cc)
-                std::swap(at(c, cc), at(piv, cc));
-        const double d = at(c, c);
-        if (d == 0)
-            continue;
-        for (int r = 0; r < k; ++r) {
-            if (r == c || at(r, c) == 0)
-                continue;
-            const double f = at(r, c) / d;
-            for (int cc = c; cc <= k; ++cc)
-                at(r, cc) -= f * at(c, cc);
-        }
-    }
-
-    constexpr double kScale = 1 << kLpcShift;
-    for (int a = 0; a < kLpcTaps; ++a) {
-        const double w = at(a, a) != 0 ? at(a, k) / at(a, a) : 0.0;
-        const double q = std::nearbyint(w * kScale);
-        if (!(q >= std::numeric_limits<std::int16_t>::min() &&
-              q <= std::numeric_limits<std::int16_t>::max()))
-            return false;
-        out.w[a] = static_cast<std::int16_t>(q);
-    }
-    const double c0 = at(kLpcTaps, kLpcTaps) != 0
-                          ? at(kLpcTaps, k) / at(kLpcTaps, kLpcTaps)
-                          : 0.0;
-    // The rounding half is folded into the bias, so ">> 12" rounds.
-    const double bias = std::nearbyint(c0 * kScale) + (1 << (kLpcShift - 1));
-    if (!(std::fabs(bias) <= kLpcMaxBias))
-        return false;
-    out.bias = static_cast<std::int32_t>(bias);
+        ne.a[a * k + a] += 1e-6 * (1 + ne.a[a * k + a]);
     return true;
+}
+
+// Solves the normal equations restricted to the unknowns `idx` with the
+// right-hand side rhs (Cholesky). Returns false unless positive definite.
+bool lpcSolve(const LpcNormal& ne, const std::vector<int>& idx,
+              const std::vector<double>& rhs, std::vector<double>& x)
+{
+    const std::size_t k = idx.size();
+    std::vector<double> l(k * k, 0.0);
+    for (std::size_t i = 0; i < k; ++i)
+        for (std::size_t j = 0; j <= i; ++j) {
+            double s = ne.at(idx[i], idx[j]);
+            for (std::size_t m = 0; m < j; ++m)
+                s -= l[i * k + m] * l[j * k + m];
+            if (i == j) {
+                if (!(s > 0))
+                    return false;
+                l[i * k + i] = std::sqrt(s);
+            } else {
+                l[i * k + j] = s / l[j * k + j];
+            }
+        }
+    x.assign(k, 0.0);
+    for (std::size_t i = 0; i < k; ++i) {
+        double s = rhs[i];
+        for (std::size_t m = 0; m < i; ++m)
+            s -= l[i * k + m] * x[m];
+        x[i] = s / l[i * k + i];
+    }
+    for (std::size_t i = k; i-- > 0;) {
+        double s = x[i];
+        for (std::size_t m = i + 1; m < k; ++m)
+            s -= l[m * k + i] * x[m];
+        x[i] = s / l[i * k + i];
+    }
+    return true;
+}
+
+// Greedy forward selection: starting from the intercept alone, repeatedly
+// add the tap that lowers the least-squares error most, until `count` taps
+// are in. Each candidate's error reduction comes from the Schur complement
+// against the running Cholesky factor, so a step costs O(62 k^2).
+std::uint64_t lpcSelectTaps(const LpcNormal& ne, int count)
+{
+    constexpr int k = kLpcUnknowns;
+    std::vector<double> l(k * k, 0.0);  // Cholesky factor, selection order
+    std::vector<int> sel;
+    std::vector<double> z;              // l^-1 b over the selection
+    std::vector<double> u(k), bestU(k);
+    sel.push_back(kLpcTaps);
+    l[0] = std::sqrt(ne.at(kLpcTaps, kLpcTaps));
+    z.push_back(ne.b[kLpcTaps] / l[0]);
+    std::uint64_t mask = 0;
+    for (int step = 0; step < count; ++step) {
+        const std::size_t n = sel.size();
+        int best = -1;
+        double bestGain = -1, bestD = 0, bestNum = 0;
+        for (int t = 0; t < kLpcTaps; ++t) {
+            if ((mask >> t) & 1)
+                continue;
+            double d = ne.at(t, t), num = ne.b[t];
+            for (std::size_t i = 0; i < n; ++i) {
+                double s = ne.at(sel[i], t);
+                for (std::size_t m = 0; m < i; ++m)
+                    s -= l[i * k + m] * u[m];
+                u[i] = s / l[i * k + i];
+                d -= u[i] * u[i];
+                num -= u[i] * z[i];
+            }
+            if (!(d > 0))
+                continue;
+            const double gain = num * num / d;
+            if (gain > bestGain) {
+                best = t;
+                bestGain = gain;
+                bestD = d;
+                bestNum = num;
+                std::copy(u.begin(), u.begin() + n, bestU.begin());
+            }
+        }
+        if (best < 0)
+            break;
+        std::copy(bestU.begin(), bestU.begin() + n, l.begin() + n * k);
+        l[n * k + n] = std::sqrt(bestD);
+        z.push_back(bestNum / l[n * k + n]);
+        sel.push_back(best);
+        mask |= std::uint64_t{1} << best;
+    }
+    return mask;
+}
+
+// Weights for the selected taps at 1/256 steps, rounded sequentially (Babai
+// style): round the largest free weight, refit the others with it fixed,
+// repeat; the intercept is fitted last. Rounding all weights at once costs
+// 1.5-5% size on scroll chunks, this ~0.05-0.1%.
+bool lpcQuantize(const LpcNormal& ne, std::uint64_t mask, LpcParams& out)
+{
+    constexpr double kScale = 1 << kLpcShift;
+    std::vector<int> free;
+    for (int t = 0; t < kLpcTaps; ++t)
+        if ((mask >> t) & 1)
+            free.push_back(t);
+    free.push_back(kLpcTaps);
+    std::vector<int> fixed;
+    std::array<double, kLpcTaps> value{};  // rounded weights, as reals
+    std::vector<double> rhs, x;
+    out = LpcParams{};
+    out.mask = mask;
+    while (true) {
+        rhs.assign(free.size(), 0.0);
+        for (std::size_t i = 0; i < free.size(); ++i) {
+            rhs[i] = ne.b[free[i]];
+            for (const int f : fixed)
+                rhs[i] -= ne.at(free[i], f) * value[f];
+        }
+        if (!lpcSolve(ne, free, rhs, x))
+            return false;
+        if (free.size() == 1)
+            break;
+        std::size_t pick = 0;
+        for (std::size_t i = 1; i + 1 < free.size(); ++i)
+            if (std::fabs(x[i]) > std::fabs(x[pick]))
+                pick = i;
+        const double q = std::clamp(std::nearbyint(x[pick] * kScale), -32768.0, 32767.0);
+        if (!std::isfinite(q))
+            return false;
+        const int t = free[pick];
+        value[t] = q / kScale;
+        out.w[t] = static_cast<std::int16_t>(q);
+        fixed.push_back(t);
+        free.erase(free.begin() + static_cast<std::ptrdiff_t>(pick));
+    }
+    // The rounding half is folded into the bias, so ">> 8" rounds.
+    const double bias = std::nearbyint(x[0] * kScale) + (1 << (kLpcShift - 1));
+    if (!std::isfinite(bias) || std::fabs(bias) > 1e15)
+        return false;
+    out.bias = static_cast<std::uint16_t>(static_cast<std::int64_t>(bias));
+    return true;
+}
+
+bool lpcFit(const std::uint8_t* v, const LpcGeometry& g, std::size_t stride,
+            LpcParams& out)
+{
+    LpcNormal ne;
+    if (!lpcNormalEquations(v, g, stride, ne))
+        return false;
+    return lpcQuantize(ne, lpcSelectTaps(ne, kLpcSelectedTaps), out);
+}
+
+std::size_t lpcParamBytes(std::uint64_t mask)
+{
+    return kLpcFixedParamBytes + 2 * static_cast<std::size_t>(std::popcount(mask));
 }
 
 void writeLpcParams(std::byte* out, const LpcParams& p)
 {
     out[0] = static_cast<std::byte>(kLpcStencilBox2);
-    for (int t = 0; t < kLpcTaps; ++t) {
-        const auto u = static_cast<std::uint16_t>(p.w[t]);
-        out[1 + 2 * t] = static_cast<std::byte>(u & 0xFF);
-        out[2 + 2 * t] = static_cast<std::byte>(u >> 8);
-    }
-    writeU32(out + 1 + 2 * kLpcTaps, static_cast<std::uint32_t>(p.bias));
+    for (int i = 0; i < 8; ++i)
+        out[1 + i] = static_cast<std::byte>((p.mask >> (8 * i)) & 0xFF);
+    std::byte* o = out + 9;
+    for (int t = 0; t < kLpcTaps; ++t)
+        if ((p.mask >> t) & 1) {
+            const auto u = static_cast<std::uint16_t>(p.w[t]);
+            *o++ = static_cast<std::byte>(u & 0xFF);
+            *o++ = static_cast<std::byte>(u >> 8);
+        }
+    o[0] = static_cast<std::byte>(p.bias & 0xFF);
+    o[1] = static_cast<std::byte>(p.bias >> 8);
 }
 
 std::optional<LpcParams> readLpcParams(std::span<const std::byte> in)
 {
-    if (in.size() < kLpcParamBytes ||
+    if (in.size() < kLpcFixedParamBytes ||
         static_cast<unsigned char>(in[0]) != kLpcStencilBox2)
         return std::nullopt;
     LpcParams p;
-    for (int t = 0; t < kLpcTaps; ++t)
-        p.w[t] = static_cast<std::int16_t>(
-            static_cast<unsigned>(in[1 + 2 * t]) |
-            (static_cast<unsigned>(in[2 + 2 * t]) << 8));
-    p.bias = static_cast<std::int32_t>(readU32(in.data() + 1 + 2 * kLpcTaps));
-    if (p.bias > kLpcMaxBias || p.bias < -kLpcMaxBias)
+    for (int i = 0; i < 8; ++i)
+        p.mask |= static_cast<std::uint64_t>(in[1 + i]) << (8 * i);
+    if ((p.mask >> kLpcTaps) != 0 || in.size() < lpcParamBytes(p.mask))
         return std::nullopt;
+    const std::byte* o = in.data() + 9;
+    auto u16 = [](const std::byte* b) {
+        return static_cast<std::uint16_t>(static_cast<unsigned>(b[0]) |
+                                          (static_cast<unsigned>(b[1]) << 8));
+    };
+    for (int t = 0; t < kLpcTaps; ++t)
+        if ((p.mask >> t) & 1) {
+            p.w[t] = static_cast<std::int16_t>(u16(o));
+            o += 2;
+        }
+    p.bias = u16(o);
     return p;
 }
 
@@ -964,8 +1160,7 @@ std::size_t lpcFitStride(const LpcGeometry& g)
     return 1;
 }
 
-// LPC payload for a quantized uint8 chunk, or nothing if the fitted weights
-// do not fit the format.
+// LPC payload for a quantized uint8 chunk, or nothing if the fit failed.
 std::optional<std::vector<std::byte>> compressLpc(
     const std::uint8_t* data, std::size_t z, std::size_t y, std::size_t x,
     int quantBinWidth)
@@ -978,7 +1173,7 @@ std::optional<std::vector<std::byte>> compressLpc(
     lpcResiduals(data, residuals.data(), g, params);
     auto output = ransCompressFrame(
         {reinterpret_cast<const std::byte*>(residuals.data()), residuals.size()},
-        kHeaderSize + kLpcParamBytes);
+        kHeaderSize + lpcParamBytes(params.mask));
     writeHeader(output, 1, quantBinWidth,
                 static_cast<unsigned>(Predictor::Lpc), z, y, x);
     writeLpcParams(output.data() + kHeaderSize, params);
@@ -1116,7 +1311,7 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
             return false;
         const auto params = readLpcParams(input.subspan(kHeaderSize));
         if (!params ||
-            !ransDecompressFrame(input.subspan(kHeaderSize + kLpcParamBytes),
+            !ransDecompressFrame(input.subspan(kHeaderSize + lpcParamBytes(params->mask)),
                                  output.data(), output.size()))
             return false;
         lpcReconstruct(reinterpret_cast<std::uint8_t*>(output.data()),

@@ -372,6 +372,7 @@ TEST_CASE("LPC roundtrips and beats the delta filter on smooth data")
         CHECK(vc_delta3d::predictor(asSpan(lpc)) == vc_delta3d::Predictor::Lpc);
         CHECK(lpc.size() < delta.size());
         CHECK((static_cast<int>(lpc[7]) & 0xFF) == 2);
+        CHECK(static_cast<int>(lpc[20]) == 2);  // stencil id
         CHECK_FALSE(vc_delta3d::deltaMask(asSpan(lpc)).has_value());
         const auto decoded = vc_delta3d::decompress(asSpan(lpc), input.size());
         REQUIRE(decoded.has_value());
@@ -447,14 +448,17 @@ TEST_CASE("Corrupt LPC payloads return nullopt")
     REQUIRE(vc_delta3d::predictor(asSpan(good)) == vc_delta3d::Predictor::Lpc);
     REQUIRE(vc_delta3d::decompress(asSpan(good), input.size()).has_value());
 
-    auto badStencil = good;
-    badStencil[20] = std::byte{9};
-    CHECK_FALSE(vc_delta3d::decompress(asSpan(badStencil), input.size()).has_value());
+    // Unknown stencil ids, including 1 (the pre-release 62-tap layout).
+    for (const auto id : {std::byte{1}, std::byte{9}}) {
+        auto badStencil = good;
+        badStencil[20] = id;
+        CHECK_FALSE(vc_delta3d::decompress(asSpan(badStencil), input.size()).has_value());
+    }
 
-    // Bias beyond 2^30 could overflow the int32 prediction sums.
-    auto badBias = good;
-    badBias[20 + 125 + 3] = std::byte{0x7F};
-    CHECK_FALSE(vc_delta3d::decompress(asSpan(badBias), input.size()).has_value());
+    // Tap mask bits beyond the 62 taps.
+    auto badMask = good;
+    badMask[20 + 8] |= std::byte{0x40};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMask), input.size()).has_value());
 
     // LPC marker with stray high bits, and an LPC payload claiming uint16.
     auto badMarker = good;
