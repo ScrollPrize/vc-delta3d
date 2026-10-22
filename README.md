@@ -134,3 +134,7 @@ on AWS `.2xlarge` instances (GCC 12) and one laptop:
 x86 decoding uses AVX2 when the CPU has it (selected at run time) and SSE2
 otherwise (LPC decoding about 1.4x slower than with AVX2). Encoded bytes are
 identical on every platform.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

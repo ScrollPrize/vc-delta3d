@@ -15,7 +15,7 @@ dependencies = [
     "numpy",
     "numcodecs>=0.15.1",
 ]
-license = "GPL-3.0-or-later"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "ScrollPrize contributors" },
