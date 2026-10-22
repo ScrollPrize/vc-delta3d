@@ -53,14 +53,27 @@ endif()
 
 if(VC_DELTA3D_BUILD_TESTS)
     enable_testing()
+    # doctest is a single header; SOURCE_SUBDIR skips its own CMake project,
+    # whose old cmake_minimum_required newer CMake versions reject.
+    include(FetchContent)
+    FetchContent_Declare(doctest
+        URL https://github.com/doctest/doctest/archive/refs/tags/v2.4.11.tar.gz
+        URL_HASH SHA256=632ed2c05a7f53fa961381497bf8069093f0d6628c5f26286161fbd32a560186
+        DOWNLOAD_EXTRACT_TIMESTAMP ON
+        SOURCE_SUBDIR header-only
+    )
+    FetchContent_MakeAvailable(doctest)
+    add_library(vc_delta3d_doctest INTERFACE)
+    target_include_directories(vc_delta3d_doctest SYSTEM INTERFACE ${doctest_SOURCE_DIR})
+
     add_executable(vc_delta3d_tests tests/test_codec.cpp)
-    target_include_directories(vc_delta3d_tests PRIVATE tests)
-    target_link_libraries(vc_delta3d_tests PRIVATE vc_delta3d::vc_delta3d)
+    target_link_libraries(vc_delta3d_tests PRIVATE vc_delta3d::vc_delta3d vc_delta3d_doctest)
     add_test(NAME vc_delta3d_tests COMMAND vc_delta3d_tests)
 
     # Includes src/codec.cpp to test LPC internals against the spec.
     add_executable(vc_delta3d_lpc_tests tests/test_lpc_internal.cpp)
-    target_include_directories(vc_delta3d_lpc_tests PRIVATE tests include)
+    target_include_directories(vc_delta3d_lpc_tests PRIVATE include)
+    target_link_libraries(vc_delta3d_lpc_tests PRIVATE vc_delta3d_doctest)
     target_compile_features(vc_delta3d_lpc_tests PRIVATE cxx_std_20)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vc_delta3d_lpc_tests PRIVATE -ffp-contract=off)
