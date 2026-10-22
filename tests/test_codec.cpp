@@ -471,3 +471,154 @@ TEST_CASE("Corrupt LPC payloads return nullopt")
     std::vector<std::byte> truncated(good.begin(), good.begin() + 100);
     CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
 }
+
+
+namespace {
+
+// `channels` distinct smooth fields, channels first (c, z, y, x) or last (z, y, x, c).
+std::vector<std::byte> channelVolume(std::array<int, 3> shape, int channels,
+                                     std::size_t elemSize, bool last)
+{
+    const std::size_t n = static_cast<std::size_t>(shape[0]) * shape[1] * shape[2];
+    std::vector<std::byte> out(n * channels * elemSize);
+    for (int c = 0; c < channels; ++c) {
+        auto field = smoothVolume(shape, elemSize);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t dst = last ? (i * channels + c) : (c * n + i);
+            for (std::size_t b = 0; b < elemSize; ++b)
+                out[dst * elemSize + b] = static_cast<std::byte>(
+                    static_cast<unsigned>(field[i * elemSize + b]) + (b == 0 ? 17u * c : 0u));
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("Multi-channel containers roundtrip in both layouts")
+{
+    const std::array<int, 3> shape{6, 5, 7};
+    for (std::size_t elemSize : {std::size_t{1}, std::size_t{2}})
+        for (int channels : {1, 3, 8})
+            for (bool last : {false, true}) {
+                CAPTURE(elemSize); CAPTURE(channels); CAPTURE(last);
+                const auto layout = last ? vc_delta3d::ChannelLayout::Last
+                                         : vc_delta3d::ChannelLayout::First;
+                const auto input = channelVolume(shape, channels, elemSize, last);
+                const auto packed = vc_delta3d::compressChannels(asSpan(input), shape, channels,
+                                                                 layout, elemSize);
+                CHECK(static_cast<int>(packed[4]) == 2);
+                CHECK(vc_delta3d::channelCount(asSpan(packed)) == channels);
+                CHECK(vc_delta3d::quantization(asSpan(packed)) == 1);
+                CHECK_FALSE(vc_delta3d::deltaMask(asSpan(packed)).has_value());
+                const auto decoded = vc_delta3d::decompress(asSpan(packed), input.size());
+                REQUIRE(decoded.has_value());
+                CHECK(*decoded == input);
+            }
+}
+
+TEST_CASE("A container holds one single-field payload per channel")
+{
+    const std::array<int, 3> shape{6, 5, 7};
+    const int channels = 4;
+    const auto input = channelVolume(shape, channels, 1, false);
+    const auto packed = vc_delta3d::compressChannels(asSpan(input), shape, channels,
+                                                     vc_delta3d::ChannelLayout::First, 1);
+    const std::size_t field = 6 * 5 * 7;
+    std::size_t expected = 24 + 4 * channels;
+    for (int c = 0; c < channels; ++c)
+        expected += vc_delta3d::compress({input.data() + c * field, field}, shape, 1).size();
+    CHECK(packed.size() == expected);
+    const auto single = vc_delta3d::compress({input.data(), field}, shape, 1);
+    CHECK(static_cast<int>(single[4]) == 1);
+    CHECK(vc_delta3d::channelCount(asSpan(single)) == 1);
+}
+
+TEST_CASE("LPC applies to every channel of a container")
+{
+    const std::array<int, 3> shape{20, 24, 22};
+    const int channels = 3;
+    std::vector<std::byte> input;
+    for (int c = 0; c < channels; ++c) {
+        const auto field = scrollLikeVolume(shape, 3 + c);
+        input.insert(input.end(), field.begin(), field.end());
+    }
+    const auto first = vc_delta3d::ChannelLayout::First;
+    const auto delta = vc_delta3d::compressChannels(asSpan(input), shape, channels, first, 1);
+    const auto lpc = vc_delta3d::compressChannels(
+        asSpan(input), shape, channels, first, 1, vc_delta3d::kQuantizationLossless,
+        vc_delta3d::Predictor::Lpc);
+    CHECK(lpc.size() < delta.size());
+    // Each channel payload is exactly what compress writes for that field.
+    const std::size_t field = input.size() / channels;
+    std::size_t offset = 24 + 4 * channels;
+    for (int c = 0; c < channels; ++c) {
+        const auto single = vc_delta3d::compress(
+            {input.data() + c * field, field}, shape, 1,
+            vc_delta3d::kQuantizationLossless, vc_delta3d::Predictor::Lpc);
+        CHECK(vc_delta3d::predictor(asSpan(single)) == vc_delta3d::Predictor::Lpc);
+        REQUIRE(offset + single.size() <= lpc.size());
+        CHECK(std::equal(single.begin(), single.end(), lpc.begin() + offset));
+        offset += single.size();
+    }
+    CHECK(offset == lpc.size());
+    const auto decoded = vc_delta3d::decompress(asSpan(lpc), input.size());
+    REQUIRE(decoded.has_value());
+    CHECK(*decoded == input);
+}
+
+TEST_CASE("Signed values roundtrip as their bytes")
+{
+    const std::array<int, 3> shape{5, 6, 7};
+    std::vector<std::int8_t> values(5 * 6 * 7);
+    for (std::size_t i = 0; i < values.size(); ++i)
+        values[i] = static_cast<std::int8_t>(static_cast<int>(i % 23) - 11);
+    const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(values.data()), values.size());
+    const auto packed = vc_delta3d::compressChannels(bytes, {5, 6, 7}, 1, vc_delta3d::ChannelLayout::Last, 1);
+    const auto decoded = vc_delta3d::decompress(asSpan(packed), values.size());
+    REQUIRE(decoded.has_value());
+    CHECK(std::memcmp(decoded->data(), values.data(), values.size()) == 0);
+    (void)shape;
+}
+
+TEST_CASE("Corrupt or mismatched containers fail to decode")
+{
+    const std::array<int, 3> shape{4, 5, 6};
+    const int channels = 3;
+    const auto input = channelVolume(shape, channels, 1, true);
+    const auto packed = vc_delta3d::compressChannels(asSpan(input), shape, channels,
+                                                     vc_delta3d::ChannelLayout::Last, 1);
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(packed), input.size() - 1).has_value());
+    auto truncated = packed;
+    truncated.resize(packed.size() - 5);
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
+    auto badCount = packed;
+    badCount[20] = std::byte{9};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badCount), input.size()).has_value());
+    auto badTable = packed;
+    badTable[24] = std::byte{0xFF}; badTable[25] = std::byte{0xFF}; badTable[26] = std::byte{0xFF};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badTable), input.size()).has_value());
+    auto badLayout = packed;
+    badLayout[7] = std::byte{2};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badLayout), input.size()).has_value());
+    auto badDims = packed;  // container says 4x5x6, but claim 4x5x3 with twice the channels
+    badDims[16] = std::byte{3}; badDims[20] = std::byte{6};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badDims), input.size()).has_value());
+    auto overflow = packed;  // dims whose product wraps a 64-bit size
+    for (int i = 8; i < 20; ++i) overflow[i] = std::byte{0xFF};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(overflow), input.size()).has_value());
+}
+
+TEST_CASE("Invalid channel arguments throw")
+{
+    const std::vector<std::byte> bytes(2 * 3 * 4 * 2);
+    CHECK_THROWS_AS(vc_delta3d::compressChannels(asSpan(bytes), {2, 3, 4}, 0,
+                                                 vc_delta3d::ChannelLayout::First, 1),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(vc_delta3d::compressChannels(asSpan(bytes), {2, 3, 4}, 3,
+                                                 vc_delta3d::ChannelLayout::First, 1),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(vc_delta3d::compressChannels(asSpan(bytes), {2, 3, 4}, 2,
+                                                 vc_delta3d::ChannelLayout::First, 3),
+                    std::invalid_argument);
+}

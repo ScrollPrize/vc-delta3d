@@ -28,6 +28,9 @@ namespace {
 
 constexpr std::size_t kHeaderSize = 20;
 constexpr unsigned char kFormatVersion = 1;
+// Multi-channel containers of version-1 payloads (see codec.hpp).
+constexpr unsigned char kContainerVersion = 2;
+constexpr std::size_t kContainerHeaderSize = 24;
 
 // Delta-axis masks: bit 0 differences along x, bit 1 along y, bit 2 along z.
 // kDeltaMaskZyx (all three passes) is what every payload used before
@@ -1325,6 +1328,87 @@ std::optional<LpcParams> readLpcParams(std::span<const std::byte> in)
     return p;
 }
 
+bool hasContainerHeader(std::span<const std::byte> input,
+                        const WireMagic& expectedMagic)
+{
+    return input.size() >= kContainerHeaderSize &&
+           std::equal(expectedMagic.begin(), expectedMagic.end(),
+                      input.begin()) &&
+           static_cast<unsigned char>(input[4]) == kContainerVersion;
+}
+
+// Copies channel `c` of `channels` interleaved elements (channels last) to or
+// from a contiguous field of n elements of T.
+template <typename T>
+void scatterChannel(const T* field, T* interleaved, std::size_t n,
+                    std::size_t c, std::size_t channels)
+{
+    for (std::size_t i = 0; i < n; ++i)
+        interleaved[i * channels + c] = field[i];
+}
+
+template <typename T>
+void channelsLastToFirst(const T* in, T* out, std::size_t n, std::size_t channels)
+{
+    for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t c = 0; c < channels; ++c)
+            out[c * n + i] = in[i * channels + c];
+}
+
+bool decompressSingle(std::span<const std::byte> input,
+                      std::span<std::byte> output,
+                      const WireMagic& expectedMagic);
+
+bool decompressContainer(std::span<const std::byte> input,
+                         std::span<std::byte> output)
+{
+    const auto elemSize = static_cast<std::size_t>(input[5]);
+    const auto layout = static_cast<unsigned char>(input[7]);
+    const std::size_t z = readU32(input.data() + 8);
+    const std::size_t y = readU32(input.data() + 12);
+    const std::size_t x = readU32(input.data() + 16);
+    const std::size_t channels = readU32(input.data() + 20);
+    if ((elemSize != 1 && elemSize != 2) || layout > 1 || z == 0 || y == 0 ||
+        x == 0 || channels == 0)
+        return false;
+    const std::size_t field = z * y * x * elemSize;
+    // Dims come from untrusted input: reject products that overflowed.
+    if (field == 0 || field / elemSize / x / y != z || output.size() % field != 0 ||
+        output.size() / field != channels)
+        return false;
+    if (channels > (input.size() - kContainerHeaderSize) / 4)
+        return false;
+    const bool interleave = layout == static_cast<unsigned char>(ChannelLayout::Last) && channels > 1;
+    std::vector<std::byte> scratch(interleave ? field : 0);
+    std::size_t offset = kContainerHeaderSize + 4 * channels;
+    for (std::size_t c = 0; c < channels; ++c) {
+        const std::size_t size = readU32(input.data() + kContainerHeaderSize + 4 * c);
+        if (offset > input.size() || size > input.size() - offset)
+            return false;
+        const auto payload = input.subspan(offset, size);
+        offset += size;
+        // Each channel is a single-field payload of the container's element size and dims.
+        if (!hasHeader(payload, kWireMagic) || payload[5] != input[5] ||
+            readU32(payload.data() + 8) != z || readU32(payload.data() + 12) != y ||
+            readU32(payload.data() + 16) != x)
+            return false;
+        const std::span<std::byte> target =
+            interleave ? std::span<std::byte>(scratch) : output.subspan(c * field, field);
+        if (!decompressSingle(payload, target, kWireMagic))
+            return false;
+        if (interleave) {
+            const std::size_t n = z * y * x;
+            if (elemSize == 1)
+                scatterChannel(reinterpret_cast<const std::uint8_t*>(scratch.data()),
+                               reinterpret_cast<std::uint8_t*>(output.data()), n, c, channels);
+            else
+                scatterChannel(reinterpret_cast<const std::uint16_t*>(scratch.data()),
+                               reinterpret_cast<std::uint16_t*>(output.data()), n, c, channels);
+        }
+    }
+    return offset == input.size();
+}
+
 // Header byte 7: bits 0-3 carry the predictor marker. Delta payloads with
 // bit 7 set carry the delta-axis mask in bits 4-6; payloads from before
 // per-chunk selection have bits 4-7 clear and imply full zyx, and a clear
@@ -1474,6 +1558,80 @@ std::optional<Predictor> predictor(std::span<const std::byte> input)
     return parsed->predictor;
 }
 
+std::vector<std::byte> compressChannels(std::span<const std::byte> input,
+                                        std::array<int, 3> shapeZYX,
+                                        int channels,
+                                        ChannelLayout layout,
+                                        std::size_t elemSize,
+                                        int quantBinWidth,
+                                        Predictor predictor)
+{
+    if (channels < 1 || (elemSize != 1 && elemSize != 2) || shapeZYX[0] <= 0 ||
+        shapeZYX[1] <= 0 || shapeZYX[2] <= 0 ||
+        (layout != ChannelLayout::First && layout != ChannelLayout::Last))
+        throw std::invalid_argument("compressChannels: invalid shape, channels or layout");
+    const std::size_t n = static_cast<std::size_t>(shapeZYX[0]) *
+                          static_cast<std::size_t>(shapeZYX[1]) *
+                          static_cast<std::size_t>(shapeZYX[2]);
+    const std::size_t field = n * elemSize;
+    const auto count = static_cast<std::size_t>(channels);
+    if (field * count != input.size())
+        throw std::invalid_argument(
+            "compressChannels: chunk shape/channels/element size does not match payload");
+
+    // Channels-last input is transposed once so every channel is a contiguous field.
+    std::vector<std::byte> firstOrder;
+    std::span<const std::byte> fields = input;
+    if (layout == ChannelLayout::Last && count > 1) {
+        firstOrder.resize(input.size());
+        if (elemSize == 1)
+            channelsLastToFirst(reinterpret_cast<const std::uint8_t*>(input.data()),
+                                reinterpret_cast<std::uint8_t*>(firstOrder.data()), n, count);
+        else
+            channelsLastToFirst(reinterpret_cast<const std::uint16_t*>(input.data()),
+                                reinterpret_cast<std::uint16_t*>(firstOrder.data()), n, count);
+        fields = firstOrder;
+    }
+
+    std::vector<std::vector<std::byte>> payloads(count);
+    std::size_t total = kContainerHeaderSize + 4 * count;
+    for (std::size_t c = 0; c < count; ++c) {
+        payloads[c] = compress(fields.subspan(c * field, field), shapeZYX, elemSize,
+                               quantBinWidth, predictor);
+        if (payloads[c].size() > 0xFFFFFFFFu)
+            throw std::invalid_argument("compressChannels: channel payload exceeds 4 GiB");
+        total += payloads[c].size();
+    }
+
+    std::vector<std::byte> output(total);
+    std::copy(kWireMagic.begin(), kWireMagic.end(), output.begin());
+    output[4] = static_cast<std::byte>(kContainerVersion);
+    output[5] = static_cast<std::byte>(elemSize);
+    output[6] = static_cast<std::byte>(quantBinWidth);
+    output[7] = static_cast<std::byte>(layout);
+    writeU32(output.data() + 8, static_cast<std::uint32_t>(shapeZYX[0]));
+    writeU32(output.data() + 12, static_cast<std::uint32_t>(shapeZYX[1]));
+    writeU32(output.data() + 16, static_cast<std::uint32_t>(shapeZYX[2]));
+    writeU32(output.data() + 20, static_cast<std::uint32_t>(count));
+    std::size_t offset = kContainerHeaderSize + 4 * count;
+    for (std::size_t c = 0; c < count; ++c) {
+        writeU32(output.data() + kContainerHeaderSize + 4 * c,
+                 static_cast<std::uint32_t>(payloads[c].size()));
+        std::copy(payloads[c].begin(), payloads[c].end(), output.begin() + offset);
+        offset += payloads[c].size();
+    }
+    return output;
+}
+
+std::optional<int> channelCount(std::span<const std::byte> input)
+{
+    if (hasHeader(input, kWireMagic))
+        return 1;
+    if (hasContainerHeader(input, kWireMagic))
+        return static_cast<int>(readU32(input.data() + 20));
+    return std::nullopt;
+}
+
 void quantize(std::span<std::byte> data,
               std::size_t elemSize,
               int quantBinWidth)
@@ -1490,7 +1648,7 @@ void quantize(std::span<std::byte> data,
 
 std::optional<int> quantization(std::span<const std::byte> input)
 {
-    if (!hasHeader(input, kWireMagic))
+    if (!hasHeader(input, kWireMagic) && !hasContainerHeader(input, kWireMagic))
         return std::nullopt;
     return std::max(1, static_cast<int>(input[6]));
 }
@@ -1514,6 +1672,17 @@ bool decompressInto(std::span<const std::byte> input,
 bool decompressIntoWithMagic(std::span<const std::byte> input,
                              std::span<std::byte> output,
                              const WireMagic& expectedMagic)
+{
+    if (hasContainerHeader(input, expectedMagic))
+        return decompressContainer(input, output);
+    return decompressSingle(input, output, expectedMagic);
+}
+
+namespace {
+
+bool decompressSingle(std::span<const std::byte> input,
+                      std::span<std::byte> output,
+                      const WireMagic& expectedMagic)
 {
     if (!hasHeader(input, expectedMagic))
         return false;
@@ -1554,6 +1723,8 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
                       parsed->mask);
     return true;
 }
+
+} // namespace
 
 std::optional<std::vector<std::byte>> decompress(
     std::span<const std::byte> input,

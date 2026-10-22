@@ -4,3 +4,5 @@
 /*.egg-info/
 __pycache__/
 *.py[cod]
+/build_py
+*.log

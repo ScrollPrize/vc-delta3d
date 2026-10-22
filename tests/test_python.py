@@ -120,3 +120,60 @@ def test_lpc_concurrent_roundtrip():
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert all(pool.map(roundtrip, chunks))
+
+
+
+def test_signed_chunks_roundtrip_losslessly():
+    source = (np.arange(4 * 5 * 6) % 37 - 18).astype(np.int8).reshape(4, 5, 6)
+    codec = Delta3D()
+    decoded = np.frombuffer(codec.decode(codec.encode(source)), dtype=np.int8).reshape(source.shape)
+    np.testing.assert_array_equal(decoded, source)
+    try:
+        Delta3D(quant=3).encode(source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("lossy quantization of signed data must be refused")
+
+
+def test_channel_axis_roundtrip_and_config():
+    rng = np.random.default_rng(0)
+    base = np.cumsum(np.cumsum(rng.integers(-2, 3, size=(6, 7, 8)), axis=1), axis=2)
+    for axis in ("first", "last"):
+        for dtype in (np.int8, np.uint8, np.int16, np.uint16):
+            fields = np.stack([(base + 9 * c) for c in range(5)], axis=0 if axis == "first" else -1)
+            source = fields.astype(dtype)
+            codec = Delta3D(channel_axis=axis)
+            encoded = codec.encode(source)
+            assert encoded[4] == 2
+            output = np.empty_like(source)
+            codec.decode(encoded, out=output)
+            np.testing.assert_array_equal(output, source)
+            config = codec.get_config()
+            assert config["channel_axis"] == axis
+            assert numcodecs.get_codec(config).channel_axis == axis
+    assert "channel_axis" not in Delta3D().get_config()
+
+
+def test_lpc_with_channel_axis():
+    fields = [_scroll_like((24, 26, 28), seed) for seed in (1, 2, 3)]
+    source = np.stack(fields, axis=-1)
+    codec = Delta3D(predictor="lpc", channel_axis="last")
+    encoded = codec.encode(source)
+    assert encoded[4] == 2
+    assert len(encoded) < len(Delta3D(channel_axis="last").encode(source))
+    output = np.empty_like(source)
+    codec.decode(encoded, out=output)
+    np.testing.assert_array_equal(output, source)
+    config = codec.get_config()
+    assert config == {"id": "vc-delta3d", "quant": 1, "predictor": "lpc", "channel_axis": "last"}
+    assert numcodecs.get_codec(config).predictor == "lpc"
+
+
+def test_channel_axis_compresses_smooth_channels_better_than_interleaving():
+    rng = np.random.default_rng(1)
+    base = np.cumsum(np.cumsum(np.cumsum(rng.integers(-1, 2, size=(32, 32, 32)), 0), 1), 2)
+    fields = np.stack([(base * (c + 1)) % 200 for c in range(16)], axis=-1).astype(np.uint8)
+    per_channel = len(Delta3D(channel_axis="last").encode(fields))
+    interleaved = len(Delta3D().encode(np.ascontiguousarray(fields.reshape(32, 32, 32 * 16))))
+    assert per_channel < interleaved

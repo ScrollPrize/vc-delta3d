@@ -83,8 +83,32 @@ namespace vc_delta3d {
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
 enum class Predictor { Delta = 1, Lpc = 2 };
 
+// Multi-channel chunks (format version 2) are a container of independent
+// version-1 payloads, one per channel, each coding that channel's z, y, x
+// field: neighboring voxels of one channel are what the delta filter exploits,
+// and interleaved channels would defeat it. Signed integers need no special
+// handling: the filter and rANS work on bytes, and deltas wrap modulo 2^8 or
+// 2^16 alike, so int8/int16 compress as their unsigned reinterpretations (only
+// quantization is value-aware; callers must keep signed data lossless).
+//
+// Version 2 layout (all integers little-endian):
+//   0..3   magic
+//   4      format version (2)
+//   5      element size in bytes (1 or 2)
+//   6      quantization bin width (as in version 1; every channel payload
+//          records it too)
+//   7      decoded channel layout: 0 channels first (c, z, y, x),
+//          1 channels last (z, y, x, c)
+//   8..19  chunk dims as three uint32: z, y, x
+//   20..23 channel count C (uint32, >= 1)
+//   24..   C uint32 payload sizes, then the C version-1 payloads (magic
+//          'D3D1') in channel order
+
 // Zarr codec identifier.
 inline constexpr const char* kCodecId = "vc-delta3d";
+
+// Position of the channel axis in a multi-channel chunk.
+enum class ChannelLayout : unsigned char { First = 0, Last = 1 };
 
 // Four-byte identifier at the start of an encoded payload. The magic-aware
 // decode entry points allow an embedding application to use the same payload
@@ -117,6 +141,24 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
 // D3D1 payload.
 std::optional<Predictor> predictor(std::span<const std::byte> input);
 
+// Compresses one chunk of `channels` fields of shapeZYX elements, laid out as
+// `layout` says, into a version-2 container (see above). quantBinWidth and
+// predictor apply to every channel. Throws std::invalid_argument unless
+// input.size() equals channels*z*y*x*elemSize with channels >= 1 and elemSize
+// 1 or 2.
+std::vector<std::byte> compressChannels(std::span<const std::byte> input,
+                                        std::array<int, 3> shapeZYX,
+                                        int channels,
+                                        ChannelLayout layout,
+                                        std::size_t elemSize,
+                                        int quantBinWidth = kQuantizationLossless,
+                                        Predictor predictor = Predictor::Delta);
+
+// Channel count of a payload: 1 for a version-1 payload, C for a version-2
+// container, std::nullopt if input is neither. The decoded size of a payload
+// is channels * z * y * x * elementSize.
+std::optional<int> channelCount(std::span<const std::byte> input);
+
 // In-place near-lossless quantization as applied by compress: snaps
 // each element to the nearest multiple of quantBinWidth (clamped to the
 // dtype max; 0 stays 0). Width 1 is a no-op. Exposed so recompression
@@ -131,12 +173,14 @@ void quantize(std::span<std::byte> data,
 std::optional<int> quantization(std::span<const std::byte> input);
 
 // Delta-axis mask recorded in a D3D1 payload (bit 0 x, bit 1 y, bit 2 z), or
-// std::nullopt if input is not a D3D1 payload or predates per-chunk filter
-// selection (such payloads are always full zyx). Recompression uses this to
+// std::nullopt if input is not a version-1 D3D1 payload (containers record a
+// mask per channel payload) or predates per-chunk filter selection (such
+// payloads are always full zyx). Recompression uses this to
 // tell whether re-encoding a payload could still shrink it.
 std::optional<int> deltaMask(std::span<const std::byte> input);
 
-// Decompresses a D3D1 payload whose decoded size must equal expectedSize.
+// Decompresses a D3D1 payload (version 1 or a version-2 container) whose
+// decoded size must equal expectedSize.
 // Returns std::nullopt on any error or size mismatch.
 std::optional<std::vector<std::byte>> decompress(
     std::span<const std::byte> input,

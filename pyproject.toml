@@ -7,8 +7,8 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vc-delta3d"
-version = "0.1.1"
-description = "Fast compression for three-dimensional uint8 and uint16 scalar fields"
+version = "0.2.0"
+description = "Fast compression for three-dimensional (optionally multi-channel) 8- and 16-bit integer fields"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
