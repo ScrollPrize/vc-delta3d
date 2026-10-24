@@ -122,6 +122,58 @@ def test_lpc_concurrent_roundtrip():
         assert all(pool.map(roundtrip, chunks))
 
 
+# sha256 of the Ctx payload of _scroll_like((128, 128, 128), 2).
+GOLDEN_CTX_SHA256 = "5ac0938475d284cec7084e22b828debf0ce0008914063d88ec5cc316d3a578be"
+
+
+def test_ctx_roundtrip_and_config():
+    source = _scroll_like((128, 128, 128), 2)
+    codec = Delta3D(predictor="ctx")
+    encoded = codec.encode(source)
+    assert encoded[7] == 3  # Ctx predictor marker
+    assert encoded[20:24] == b"VCNG" and encoded[25] == 6  # volcodec-ng mode 6
+    assert len(encoded) < len(Delta3D(predictor="lpc").encode(source))
+    decoded = np.frombuffer(codec.decode(encoded), dtype=np.uint8)
+    np.testing.assert_array_equal(decoded.reshape(source.shape), source)
+
+    config = codec.get_config()
+    assert config == {"id": "vc-delta3d", "quant": 1, "predictor": "ctx"}
+    assert numcodecs.get_codec(config).predictor == "ctx"
+
+
+def test_ctx_falls_back_to_lpc():
+    # Shapes other than 128^3, and quantized chunks, get the LPC behavior.
+    small = _scroll_like((32, 40, 36), 1)
+    assert Delta3D(predictor="ctx").encode(small) == Delta3D(predictor="lpc").encode(small)
+    source = _scroll_like((128, 128, 128), 3)
+    quantized = Delta3D(quant=3, predictor="ctx").encode(source)
+    assert quantized == Delta3D(quant=3, predictor="lpc").encode(source)
+
+
+def test_ctx_payload_is_identical_on_every_platform():
+    # The context model's fit is FMA-free double precision and its SIMD
+    # kernels give the same integers as the plain C ones, so every platform
+    # must produce these bytes.
+    import hashlib
+
+    encoded = Delta3D(predictor="ctx").encode(_scroll_like((128, 128, 128), 2))
+    assert encoded[7] == 3
+    assert hashlib.sha256(encoded).hexdigest() == GOLDEN_CTX_SHA256
+
+
+def test_ctx_concurrent_roundtrip():
+    from concurrent.futures import ThreadPoolExecutor
+
+    chunks = [_scroll_like((128, 128, 128), seed) for seed in range(8)]
+    codec = Delta3D(predictor="ctx")
+
+    def roundtrip(chunk):
+        decoded = np.frombuffer(codec.decode(codec.encode(chunk)), np.uint8)
+        return np.array_equal(decoded.reshape(chunk.shape), chunk)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert all(pool.map(roundtrip, chunks))
+
 
 def test_signed_chunks_roundtrip_losslessly():
     source = (np.arange(4 * 5 * 6) % 37 - 18).astype(np.int8).reshape(4, 5, 6)

@@ -1,5 +1,5 @@
-// VC-Delta3D codec coverage: D3D1 delta and LPC + rANS roundtrips and
-// corrupt/mismatched payload handling.
+// VC-Delta3D codec coverage: D3D1 delta and LPC + rANS and context-model
+// (Ctx) roundtrips and corrupt/mismatched payload handling.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -470,6 +470,170 @@ TEST_CASE("Corrupt LPC payloads return nullopt")
 
     std::vector<std::byte> truncated(good.begin(), good.begin() + 100);
     CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
+}
+
+namespace {
+
+constexpr std::array<int, 3> kCtxShape{128, 128, 128};
+constexpr std::size_t kCtxVoxels = std::size_t{128} * 128 * 128;
+
+std::vector<std::byte> compressCtx(const std::vector<std::byte>& input,
+                                   std::array<int, 3> shape = kCtxShape,
+                                   std::size_t elemSize = 1,
+                                   int quant = vc_delta3d::kQuantizationLossless)
+{
+    return vc_delta3d::compress(asSpan(input), shape, elemSize, quant,
+                                vc_delta3d::Predictor::Ctx);
+}
+
+} // namespace
+
+TEST_CASE("Ctx roundtrips 128^3 chunks and beats LPC on smooth data")
+{
+    const auto input = scrollLikeVolume(kCtxShape, 11);
+    const auto ctx = compressCtx(input);
+    const auto lpc = vc_delta3d::compress(
+        asSpan(input), kCtxShape, 1, vc_delta3d::kQuantizationLossless,
+        vc_delta3d::Predictor::Lpc);
+    CHECK(vc_delta3d::predictor(asSpan(ctx)) == vc_delta3d::Predictor::Ctx);
+    CHECK((static_cast<int>(ctx[7]) & 0xFF) == 3);
+    CHECK_FALSE(vc_delta3d::deltaMask(asSpan(ctx)).has_value());
+    // The volcodec-ng stream follows the D3D1 header: "VCNG", revision 2, mode 6.
+    CHECK(std::memcmp(ctx.data() + 20, "VCNG", 4) == 0);
+    CHECK(static_cast<int>(ctx[24]) == 2);
+    CHECK(static_cast<int>(ctx[25]) == 6);
+    CHECK(ctx.size() < lpc.size());
+    const auto decoded = vc_delta3d::decompress(asSpan(ctx), input.size());
+    REQUIRE(decoded.has_value());
+    CHECK(*decoded == input);
+    CHECK(compressCtx(input) == ctx);  // deterministic
+}
+
+TEST_CASE("Ctx stores constant and incompressible chunks compactly")
+{
+    std::mt19937 rng(12);
+    std::vector<std::byte> noise(kCtxVoxels), constant(kCtxVoxels, std::byte{91});
+    for (auto& b : noise) b = static_cast<std::byte>(rng() & 0xFF);
+    const auto c = compressCtx(constant);
+    CHECK(c.size() == 20 + 12 + 1);  // mode 3: one byte
+    const auto r = compressCtx(noise);
+    CHECK(r.size() == 20 + 12 + kCtxVoxels);  // mode 2: raw
+    for (const auto* pair : {&c, &r}) {
+        const auto& input = pair == &c ? constant : noise;
+        const auto decoded = vc_delta3d::decompress(asSpan(*pair), kCtxVoxels);
+        REQUIRE(decoded.has_value());
+        CHECK(*decoded == input);
+    }
+}
+
+TEST_CASE("Ctx falls back to LPC where it does not apply")
+{
+    // Any shape other than 128^3 gets the Lpc behavior, uint16 the delta filter.
+    for (const auto shape : {std::array<int, 3>{64, 64, 64},
+                             std::array<int, 3>{128, 128, 127},
+                             std::array<int, 3>{129, 128, 128}}) {
+        CAPTURE(shape[0]); CAPTURE(shape[2]);
+        const auto input = scrollLikeVolume(shape, 13);
+        const auto ctx = compressCtx(input, shape);
+        const auto lpc = vc_delta3d::compress(
+            asSpan(input), shape, 1, vc_delta3d::kQuantizationLossless,
+            vc_delta3d::Predictor::Lpc);
+        CHECK(ctx == lpc);
+        CHECK(vc_delta3d::predictor(asSpan(ctx)) == vc_delta3d::Predictor::Lpc);
+    }
+    const auto input16 = smoothVolume(kCtxShape, 2);
+    const auto c16 = compressCtx(input16, kCtxShape, 2);
+    CHECK(vc_delta3d::predictor(asSpan(c16)) == vc_delta3d::Predictor::Delta);
+    const auto decoded = vc_delta3d::decompress(asSpan(c16), input16.size());
+    REQUIRE(decoded.has_value());
+    CHECK(*decoded == input16);
+}
+
+TEST_CASE("Ctx with near-lossless quantization takes the Lpc path")
+{
+    // On quantized voxels the context model codes worse than the delta filter
+    // (multiples of the bin width defeat its fitted predictor), so a quantized
+    // Ctx chunk is exactly the Lpc payload, which bounds the error as usual.
+    const auto input = scrollLikeVolume(kCtxShape, 14);
+    const int width = vc_delta3d::kQuantizationMaxError1;
+    const auto compressed = compressCtx(input, kCtxShape, 1, width);
+    CHECK(compressed == vc_delta3d::compress(asSpan(input), kCtxShape, 1, width,
+                                             vc_delta3d::Predictor::Lpc));
+    CHECK(vc_delta3d::quantization(asSpan(compressed)) == width);
+    CHECK(compressed.size() < compressCtx(input).size());
+    const auto decoded = vc_delta3d::decompress(asSpan(compressed), input.size());
+    REQUIRE(decoded.has_value());
+    auto expected = input;
+    vc_delta3d::quantize(expected, 1, width);
+    CHECK(*decoded == expected);
+}
+
+TEST_CASE("Ctx applies to every channel of a container")
+{
+    const int channels = 2;
+    std::vector<std::byte> input;
+    for (int c = 0; c < channels; ++c) {
+        const auto field = scrollLikeVolume(kCtxShape, 15 + c);
+        input.insert(input.end(), field.begin(), field.end());
+    }
+    const auto packed = vc_delta3d::compressChannels(
+        asSpan(input), kCtxShape, channels, vc_delta3d::ChannelLayout::First, 1,
+        vc_delta3d::kQuantizationLossless, vc_delta3d::Predictor::Ctx);
+    std::size_t offset = 24 + 4 * channels;
+    for (int c = 0; c < channels; ++c) {
+        const auto single = compressCtx(std::vector<std::byte>(
+            input.begin() + c * kCtxVoxels, input.begin() + (c + 1) * kCtxVoxels));
+        CHECK(vc_delta3d::predictor(asSpan(single)) == vc_delta3d::Predictor::Ctx);
+        REQUIRE(offset + single.size() <= packed.size());
+        CHECK(std::equal(single.begin(), single.end(), packed.begin() + offset));
+        offset += single.size();
+    }
+    CHECK(offset == packed.size());
+    const auto decoded = vc_delta3d::decompress(asSpan(packed), input.size());
+    REQUIRE(decoded.has_value());
+    CHECK(*decoded == input);
+}
+
+TEST_CASE("Corrupt Ctx payloads return nullopt")
+{
+    const auto input = scrollLikeVolume(kCtxShape, 16);
+    const auto good = compressCtx(input);
+    REQUIRE(vc_delta3d::decompress(asSpan(good), input.size()).has_value());
+
+    // Ctx marker with stray high bits, a uint16 Ctx payload, dims other than 128^3.
+    auto badMarker = good;
+    badMarker[7] = std::byte{0x83};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMarker), input.size()).has_value());
+    auto badElem = good;
+    badElem[5] = std::byte{2};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badElem), 2 * input.size()).has_value());
+    auto badDims = good;
+    badDims[16] = std::byte{64};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badDims), input.size() / 2).has_value());
+
+    // A damaged volcodec-ng header, and truncated streams.
+    auto badMagic = good;
+    badMagic[20] = std::byte{'X'};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMagic), input.size()).has_value());
+    auto badMode = good;
+    badMode[25] = std::byte{4};
+    CHECK_FALSE(vc_delta3d::decompress(asSpan(badMode), input.size()).has_value());
+    for (const std::size_t keep : {std::size_t{20}, std::size_t{31}, std::size_t{40},
+                                   good.size() / 2, good.size() - 1}) {
+        CAPTURE(keep);
+        std::vector<std::byte> truncated(good.begin(), good.begin() + keep);
+        CHECK_FALSE(vc_delta3d::decompress(asSpan(truncated), input.size()).has_value());
+    }
+
+    // Flipped bits in the stream must not crash the decoder (whether it
+    // notices depends on where they land).
+    std::mt19937 rng(17);
+    for (int i = 0; i < 200; ++i) {
+        auto flipped = good;
+        const std::size_t at = 26 + rng() % (good.size() - 26);
+        flipped[at] ^= static_cast<std::byte>(1u << (rng() % 8));
+        (void)vc_delta3d::decompress(asSpan(flipped), input.size());
+    }
 }
 
 

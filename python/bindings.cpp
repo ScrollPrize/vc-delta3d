@@ -44,7 +44,9 @@ vc_delta3d::Predictor parsePredictor(const std::string& name)
         return vc_delta3d::Predictor::Delta;
     if (name == "lpc")
         return vc_delta3d::Predictor::Lpc;
-    throw std::invalid_argument("predictor must be 'delta' or 'lpc'");
+    if (name == "ctx")
+        return vc_delta3d::Predictor::Ctx;
+    throw std::invalid_argument("predictor must be 'delta', 'lpc' or 'ctx'");
 }
 
 nb::bytes toBytes(const std::vector<std::byte>& v)

@@ -9,7 +9,7 @@ run for a given store hits the network.
 
 Usage:
     python3 run.py s3://bucket/path/to/volume.zarr [--chunks 50]
-                   [--levels N] [--reps 5]
+                   [--levels N] [--reps 5] [--predictor delta|lpc|ctx]
 """
 
 from __future__ import annotations
@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
                     help="benchmark the first N levels (default: all)")
     ap.add_argument("--reps", type=int, default=5,
                     help="timing repetitions, best-of is reported (default 5)")
+    ap.add_argument("--predictor", choices=("delta", "lpc", "ctx"), default="delta",
+                    help="predictor to benchmark (default delta)")
     ap.add_argument("--min-nonzero", type=float, default=0.05,
                     help="minimum nonzero-voxel fraction per chunk "
                          "(default 0.05)")
@@ -165,16 +167,22 @@ def fetch_level(fs, meta: dict, array_path: str, out_dir: Path,
 def build_bench() -> Path:
     exe = CACHE_ROOT / "bench"
     sources = [BENCH_DIR / "bench.cpp", REPO_ROOT / "src" / "codec.cpp"]
-    headers = [REPO_ROOT / "include" / "vc_delta3d" / "codec.hpp"]
+    c_source = REPO_ROOT / "src" / "volcodec" / "llctx.c"
+    headers = [REPO_ROOT / "include" / "vc_delta3d" / "codec.hpp",
+               REPO_ROOT / "src" / "volcodec" / "llctx.h",
+               REPO_ROOT / "src" / "volcodec" / "volcodec_ng_lossless.h"]
     if exe.exists() and all(
             exe.stat().st_mtime > s.stat().st_mtime
-            for s in sources + headers):
+            for s in sources + headers + [c_source]):
         return exe
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    cmd = ["g++", "-O3", "-std=c++20", "-I", str(REPO_ROOT / "include"),
-           *map(str, sources), "-o", str(exe)]
-    print("building:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    # The context-model coder is C; g++ would compile a .c file as C++.
+    c_obj = CACHE_ROOT / "llctx.o"
+    for cmd in (["gcc", "-O3", "-std=c11", "-c", str(c_source), "-o", str(c_obj)],
+                ["g++", "-O3", "-std=c++20", "-I", str(REPO_ROOT / "include"),
+                 *map(str, sources), str(c_obj), "-lm", "-o", str(exe)]):
+        print("building:", " ".join(cmd))
+        subprocess.run(cmd, check=True)
     return exe
 
 
@@ -197,8 +205,8 @@ def main() -> None:
 
     exe = build_bench()
     for name, _ in levels:
-        subprocess.run([str(exe), str(store_cache / name), str(args.reps)],
-                       check=True)
+        subprocess.run([str(exe), str(store_cache / name), str(args.reps),
+                        args.predictor], check=True)
 
 
 if __name__ == "__main__":

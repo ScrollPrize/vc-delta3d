@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(vc_delta3d VERSION 0.2.0 LANGUAGES CXX)
+project(vc_delta3d VERSION 0.2.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -9,13 +9,23 @@ option(VC_DELTA3D_BUILD_PYTHON "Build the Python extension" OFF)
 option(VC_DELTA3D_BUILD_TESTS "Build the C++ codec tests" ${PROJECT_IS_TOP_LEVEL})
 option(VC_DELTA3D_INSTALL_CPP "Install the C++ library and CMake package" ON)
 
-add_library(vc_delta3d STATIC src/codec.cpp)
+add_library(vc_delta3d STATIC src/codec.cpp src/volcodec/llctx.c)
 add_library(vc_delta3d::vc_delta3d ALIAS vc_delta3d)
 set_target_properties(vc_delta3d PROPERTIES
     EXPORT_NAME vc_delta3d
     POSITION_INDEPENDENT_CODE ON
 )
 target_compile_features(vc_delta3d PUBLIC cxx_std_20)
+# The context-model coder (Predictor::Ctx) is C11, vendored in src/volcodec/.
+# C_STANDARD is a target property (CMake ignores it on a source file) and
+# applies only to the target's C source; MSVC needs it for /std:c11.
+set_target_properties(vc_delta3d PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+)
+if(NOT MSVC)
+    target_link_libraries(vc_delta3d PRIVATE m)
+endif()
 # The LPC fit solves its normal equations in double precision; no fused
 # multiply-adds keeps the fitted weights, and so the payload bytes, identical
 # across platforms (GCC contracts by default on aarch64).
@@ -71,12 +81,16 @@ if(VC_DELTA3D_BUILD_TESTS)
     add_test(NAME vc_delta3d_tests COMMAND vc_delta3d_tests)
 
     # Includes src/codec.cpp to test LPC internals against the spec.
-    add_executable(vc_delta3d_lpc_tests tests/test_lpc_internal.cpp)
+    add_executable(vc_delta3d_lpc_tests tests/test_lpc_internal.cpp src/volcodec/llctx.c)
     target_include_directories(vc_delta3d_lpc_tests PRIVATE include)
     target_link_libraries(vc_delta3d_lpc_tests PRIVATE vc_delta3d_doctest)
     target_compile_features(vc_delta3d_lpc_tests PRIVATE cxx_std_20)
+    set_target_properties(vc_delta3d_lpc_tests PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vc_delta3d_lpc_tests PRIVATE -ffp-contract=off)
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(vc_delta3d_lpc_tests PRIVATE m)
     endif()
     add_test(NAME vc_delta3d_lpc_tests COMMAND vc_delta3d_lpc_tests)
 endif()

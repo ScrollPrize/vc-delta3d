@@ -47,16 +47,31 @@ namespace vc_delta3d {
 // The encoder also builds the delta frame and keeps whichever payload is
 // smaller, so Lpc is never worse than Delta.
 //
+// Predictor::Ctx codes uint8 chunks of exactly 128^3 with a context-modelled
+// lossless coder (volcodec-ng mode 6, vendored in src/volcodec/): each voxel
+// is predicted from 40 of 82 causal neighbors in the same row, the three rows
+// above and the two previous slices, with weights least-squares fitted per
+// chunk, and the residuals are coded with static rANS tables chosen per voxel
+// by the activity of already decoded neighbors. On held-out scroll CT chunks
+// it is about 8% smaller than Lpc and encodes and decodes faster (see the
+// README). The context model is lossless only: other shapes, uint16 chunks
+// and quantized chunks (quantBinWidth > 1, where it codes worse than the
+// delta filter) get the Lpc behavior.
+//
 // D3D1 layout (all integers little-endian):
 //   0..3   magic 'D' '3' 'D' '1'
 //   4      format version (1)
 //   5      element size in bytes (1 or 2)
 //   6      quantization bin width (0 and 1 both mean lossless)
-//   7      bits 0-3: predictor marker, 1 = delta filter, 2 = LPC.
+//   7      bits 0-3: predictor marker, 1 = delta filter, 2 = LPC,
+//          3 = context model (Ctx).
 //          Delta: bit 7 set means bits 4-6 record the delta-axis mask (bit 4
 //          x, bit 5 y, bit 6 z). When bit 7 is clear, the filter is full zyx.
-//          LPC: bits 4-7 are zero.
+//          LPC and Ctx: bits 4-7 are zero.
 //   8..19  chunk dims as three uint32: z, y, x (element counts)
+//   20..   Ctx only: one volcodec-ng stream, the rest of the payload (element
+//          size 1, dims 128, 128, 128; see src/volcodec/volcodec_ng_lossless.h
+//          for its 12-byte "VCNG" header and modes). Nothing below applies.
 //   20..   LPC only: the parameter block below (11 + 2 * taps bytes)
 //   then   256 uint16 symbol frequencies summing to 4096, then eight uint64
 //          initial rANS states, then the rANS byte stream (decoded back to
@@ -81,7 +96,7 @@ namespace vc_delta3d {
 // neighbors outside the chunk as 0.
 
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
-enum class Predictor { Delta = 1, Lpc = 2 };
+enum class Predictor { Delta = 1, Lpc = 2, Ctx = 3 };
 
 // Multi-channel chunks (format version 2) are a container of independent
 // version-1 payloads, one per channel, each coding that channel's z, y, x
@@ -126,6 +141,10 @@ inline constexpr int kQuantizationMaxError2 = 5;
 // Smallest chunk edge for which Predictor::Lpc tries the linear predictor;
 // smaller chunks, and uint16 chunks, always use the delta filter.
 inline constexpr int kLpcMinDim = 16;
+
+// The only chunk edge Predictor::Ctx codes with the context model (all three
+// dims, uint8, lossless); everything else falls back to the Lpc behavior.
+inline constexpr int kCtxDim = 128;
 
 // Compresses one decoded chunk of shapeZYX elements of elemSize bytes.
 // quantBinWidth 1 is lossless; larger widths quantize first (see above).

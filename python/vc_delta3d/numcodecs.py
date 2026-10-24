@@ -19,6 +19,10 @@ class Delta3D(numcodecs.abc.Codec):
     at least 16 voxels along every axis: smaller payloads, slower encode and
     decode. Fields it does not apply to, or where it would not be smaller,
     use the default delta filter. Decoding needs no configuration either way.
+
+    ``predictor="ctx"`` codes lossless 128^3 uint8 fields with a context-modelled
+    coder (volcodec-ng mode 6): smaller than ``"lpc"`` on scroll CT, and faster
+    to encode and decode. Other fields, and quantized ones, get ``"lpc"``.
     """
 
     codec_id = "vc-delta3d"
@@ -35,8 +39,8 @@ class Delta3D(numcodecs.abc.Codec):
             raise ValueError("vc-delta3d only supports rANS entropy coding")
         if not 1 <= int(quant) <= 255:
             raise ValueError("quant must be in [1, 255]")
-        if predictor not in ("delta", "lpc"):
-            raise ValueError("predictor must be 'delta' or 'lpc'")
+        if predictor not in ("delta", "lpc", "ctx"):
+            raise ValueError("predictor must be 'delta', 'lpc' or 'ctx'")
         if channel_axis not in (None, "first", "last"):
             raise ValueError('channel_axis must be None, "first" or "last"')
         self.quant = int(quant)

@@ -1,5 +1,7 @@
 #include <vc_delta3d/codec.hpp>
 
+#include "volcodec/llctx.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -1412,7 +1414,8 @@ bool decompressContainer(std::span<const std::byte> input,
 // Header byte 7: bits 0-3 carry the predictor marker. Delta payloads with
 // bit 7 set carry the delta-axis mask in bits 4-6; payloads from before
 // per-chunk selection have bits 4-7 clear and imply full zyx, and a clear
-// flag with nonzero mask bits is invalid. LPC payloads have bits 4-7 clear.
+// flag with nonzero mask bits is invalid. LPC and Ctx payloads have bits 4-7
+// clear.
 struct HeaderByte {
     Predictor predictor;
     unsigned mask;
@@ -1421,10 +1424,12 @@ struct HeaderByte {
 
 std::optional<HeaderByte> parseHeaderByte(unsigned char b)
 {
-    if ((b & 0x0F) == static_cast<unsigned>(Predictor::Lpc)) {
-        if ((b & 0xF0) != 0)
-            return std::nullopt;
-        return HeaderByte{Predictor::Lpc, 0, false};
+    for (const auto p : {Predictor::Lpc, Predictor::Ctx}) {
+        if ((b & 0x0F) == static_cast<unsigned>(p)) {
+            if ((b & 0xF0) != 0)
+                return std::nullopt;
+            return HeaderByte{p, 0, false};
+        }
     }
     const bool hasMask = (b & 0x80) != 0;
     if ((b & 0x0F) != static_cast<unsigned>(Predictor::Delta) ||
@@ -1487,6 +1492,26 @@ std::optional<std::vector<std::byte>> compressLpc(
     return output;
 }
 
+bool isCtxShape(std::size_t z, std::size_t y, std::size_t x)
+{
+    constexpr auto d = static_cast<std::size_t>(kCtxDim);
+    return z == d && y == d && x == d;
+}
+
+// Ctx payload for a quantized 128^3 uint8 chunk.
+std::vector<std::byte> compressCtx(const std::uint8_t* data, int quantBinWidth)
+{
+    std::vector<std::byte> output(kHeaderSize + vc_llctx_encode_bound());
+    std::size_t n = 0;
+    if (vc_llctx_encode(data, reinterpret_cast<std::uint8_t*>(output.data()) + kHeaderSize,
+                        output.size() - kHeaderSize, &n) != 0)
+        throw std::runtime_error("compress: context-model encoder failed");
+    output.resize(kHeaderSize + n);
+    writeHeader(output, 1, quantBinWidth, static_cast<unsigned>(Predictor::Ctx),
+                kCtxDim, kCtxDim, kCtxDim);
+    return output;
+}
+
 } // namespace
 
 std::vector<std::byte> compress(std::span<const std::byte> input,
@@ -1518,8 +1543,15 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     std::vector<std::byte> filtered(input.begin(), input.end());
     quantize({filtered.data(), filtered.size()}, elemSize, quantBinWidth);
 
+    // Ctx is lossless only: on quantized chunks its fitted predictor loses to
+    // the delta filter (which the Lpc path below then picks).
+    if (predictor == Predictor::Ctx && elemSize == 1 &&
+        quantBinWidth == kQuantizationLossless && isCtxShape(z, y, x))
+        return compressCtx(reinterpret_cast<const std::uint8_t*>(filtered.data()),
+                           quantBinWidth);
+
     std::optional<std::vector<std::byte>> lpc;
-    if (predictor == Predictor::Lpc && elemSize == 1 &&
+    if ((predictor == Predictor::Lpc || predictor == Predictor::Ctx) && elemSize == 1 &&
         std::min({z, y, x}) >= static_cast<std::size_t>(kLpcMinDim))
         lpc = compressLpc(reinterpret_cast<const std::uint8_t*>(filtered.data()),
                           z, y, x, quantBinWidth);
@@ -1697,6 +1729,16 @@ bool decompressSingle(std::span<const std::byte> input,
     const auto parsed = parseHeaderByte(static_cast<unsigned char>(input[7]));
     if (!parsed)
         return false;
+
+    if (parsed->predictor == Predictor::Ctx) {
+        if (elemSize != 1 || !isCtxShape(z, y, x))
+            return false;
+        const auto stream = input.subspan(kHeaderSize);
+        return vc_llctx_decode(reinterpret_cast<const std::uint8_t*>(stream.data()),
+                               stream.size(),
+                               reinterpret_cast<std::uint8_t*>(output.data()),
+                               output.size()) == 0;
+    }
 
     if (parsed->predictor == Predictor::Lpc) {
         if (elemSize != 1)

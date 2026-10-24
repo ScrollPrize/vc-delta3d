@@ -2,9 +2,9 @@
 
 VC-Delta3D compresses three-dimensional `uint8`, `uint16`, `int8` and `int16`
 scalar fields, and multi-channel chunks whose channels are such fields.
-It combines optional bounded scalar quantization, a choice of two predictors
-(an axis-adaptive delta filter or a per-chunk linear predictor), and order-0
-rANS entropy coding.
+It combines optional bounded scalar quantization, a choice of predictors
+(an axis-adaptive delta filter, a per-chunk linear predictor, or for lossless
+128^3 uint8 chunks a context-modelled coder), and rANS entropy coding.
 
 Encoded chunks use the self-describing `D3D1` wire format and the Zarr
 compressor identifier `vc-delta3d`.
@@ -19,7 +19,8 @@ single-field payloads are unchanged in both directions.
 ## Compression methods
 
 Each chunk is predicted from its already decoded voxels, and the prediction
-residuals are entropy-coded with order-0 rANS. The predictor is chosen when
+residuals are entropy-coded with rANS (order-0 for Delta and LPC, context
+selected tables for Ctx). The predictor is chosen when
 encoding and recorded in every chunk, so decoding needs no configuration.
 
 - **Delta** (default, `predictor="delta"`, C++ `vc_delta3d::Predictor::Delta`):
@@ -32,8 +33,18 @@ encoding and recorded in every chunk, so decoding needs no configuration.
   compresses best. LPC can be used for uint8 data in chunks of at least 16^3
   voxels; other chunks are stored with the delta filter. Introduced in version
   0.2.0.
+- **Ctx** (`predictor="ctx"`, C++ `vc_delta3d::Predictor::Ctx`): a
+  context-modelled lossless coder for 128^3 uint8 chunks (volcodec-ng mode 6,
+  vendored in `src/volcodec/`). Each voxel is predicted from 40 of 82 causal
+  neighbours in the same row, the three rows above and the two previous
+  slices, with weights least-squares fitted per chunk; the residuals are coded
+  with static rANS tables chosen per voxel by the activity of already decoded
+  neighbours. Smaller than LPC on scroll CT and faster to encode and decode
+  (see Performance). Other shapes, uint16 chunks and quantized chunks are
+  stored as LPC would store them, since on quantized voxels the context model
+  codes worse than the delta filter.
 
-Either method can be preceded by quantization (`quant`, unsigned types only):
+Delta and LPC can be preceded by quantization (`quant`, unsigned types only):
 a bin width of 2k+1 bounds the per-voxel error by +-k, and 1 is lossless. In
 multi-channel chunks the method applies to every channel. In zarr metadata the
 codec reads e.g. `{"id": "vc-delta3d", "quant": 1, "predictor": "lpc"}`; the
@@ -50,6 +61,10 @@ auto decoded = vc_delta3d::decompress(encoded, bytes.size());
 // Best compression (uint8):
 auto smaller = vc_delta3d::compress(bytes, {z, y, x}, 1, vc_delta3d::kQuantizationLossless,
                                     vc_delta3d::Predictor::Lpc);
+
+// Lossless 128^3 uint8 chunks, smaller and faster than LPC:
+auto ctx = vc_delta3d::compress(bytes, {128, 128, 128}, 1, vc_delta3d::kQuantizationLossless,
+                                vc_delta3d::Predictor::Ctx);
 
 // Multi-channel, e.g. a (z, y, x, c) chunk of embeddings:
 auto packed = vc_delta3d::compressChannels(bytes, {z, y, x}, c,
@@ -70,6 +85,8 @@ decoded = codec.decode(encoded)
 
 # Best compression (uint8):
 codec = Delta3D(predictor="lpc")
+# Lossless 128^3 uint8 chunks, smaller and faster than LPC:
+codec = Delta3D(predictor="ctx")
 
 # 4D chunks with a channel axis ("first" or "last"); int8/int16 must stay lossless.
 codec = Delta3D(channel_axis="last")
@@ -134,6 +151,37 @@ on AWS `.2xlarge` instances (GCC 12) and one laptop:
 x86 decoding uses AVX2 when the CPU has it (selected at run time) and SSE2
 otherwise (LPC decoding about 1.4x slower than with AVX2). Encoded bytes are
 identical on every platform.
+
+### Ctx against LPC
+
+Held out: 12 crops of 256^3 (96 chunks of 128^3), level 0, lossless, from 10
+scans in four resolution groups (0.55, 1.13, 2.4 and 8.6 to 9.4 um), picked by
+a fixed rule after the code was frozen and used once. One thread on an AMD
+EPYC 7R13 (AVX2), against vc-delta3d 0.2.0 LPC:
+
+| | LPC | Ctx |
+|---|---|---|
+| ratio | 3.77x | 4.10x (files 8.1% smaller) |
+| decode | 284 MB/s | 334 MB/s (1.18x) |
+| encode | 85 MB/s | 119 MB/s (1.40x) |
+
+Ctx was smaller and faster both ways on every one of the 12 crops. By group
+(LPC, Ctx): 0.55 um 3.99x, 4.26x; 1.13 um 5.54x, 6.23x; 2.4 um 3.98x, 4.32x;
+8.6 to 9.4 um 2.65x, 2.88x.
+
+With `benchmark/run.py --predictor` on the 63 PHercParis4 2.4um level-0 chunks
+it samples by default, one pinned core of a shared cloud
+VM (Intel Xeon, 2.1 GHz, AVX2), best of 3, two runs each:
+
+| | delta | LPC | Ctx |
+|---|---|---|---|
+| ratio | 2.82x | 3.60x | 3.86x |
+| decode MB/s | 356, 411 | 232, 200 | 273, 236 |
+| encode MB/s | 183, 173 | 58, 58 | 91, 81 |
+
+ARM (NEON) speeds for Ctx are not measured yet. Ctx payloads are meant to be
+byte-identical on every platform too; `tests/test_python.py` checks a golden
+digest on each CI platform.
 
 ## License
 
