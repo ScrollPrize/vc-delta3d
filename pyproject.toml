@@ -58,10 +58,12 @@ VC_DELTA3D_INSTALL_CPP = "OFF"
 build = "cp{312,313,314}-*"
 skip = "*-musllinux_*"
 test-requires = ["pytest"]
-test-command = "pytest -q {project}/tests/test_python.py"
+test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py"
 audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
 
 [tool.cibuildwheel.linux]
+# Runs inside each manylinux container, not on the Ubuntu host.
+before-all = "dnf install -y libzstd-devel"
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"

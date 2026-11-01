@@ -115,6 +115,14 @@ Importing `vc_delta3d` registers `vc-delta3d` with numcodecs.
 
 ## Build
 
+Source builds require the Zstd development headers and library, not just the
+`zstd` command-line tool: `apt install libzstd-dev` on Ubuntu,
+`dnf install libzstd-devel` on Fedora/RHEL, `brew install zstd` on macOS,
+or `vcpkg install zstd:x64-windows-static-md` on Windows. For non-system
+prefixes, set `CMAKE_PREFIX_PATH` to the installation prefix. Wheel CI installs
+this dependency explicitly; Linux/macOS wheel repair bundles the shared library,
+and Windows links the static library with the dynamic MSVC runtime.
+
 ```sh
 cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release
 ninja -C build
