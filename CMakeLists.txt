@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(vc_delta3d VERSION 0.2.0 LANGUAGES CXX)
+project(vc_delta3d VERSION 0.3.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -10,6 +10,10 @@ option(VC_DELTA3D_BUILD_TESTS "Build the C++ codec tests" ${PROJECT_IS_TOP_LEVEL
 option(VC_DELTA3D_INSTALL_CPP "Install the C++ library and CMake package" ON)
 
 add_library(vc_delta3d STATIC src/codec.cpp)
+option(VC_DELTA3D_BUILD_NG "Build modern NG/Delta presets" ON)
+if(VC_DELTA3D_BUILD_NG)
+    include(cmake/modern.cmake)
+endif()
 add_library(vc_delta3d::vc_delta3d ALIAS vc_delta3d)
 set_target_properties(vc_delta3d PROPERTIES
     EXPORT_NAME vc_delta3d
@@ -82,6 +86,8 @@ if(VC_DELTA3D_BUILD_TESTS)
 endif()
 
 if(VC_DELTA3D_INSTALL_CPP)
+    install(FILES LICENSE AUTHORS.md DESTINATION ${CMAKE_INSTALL_DATADIR}/vc-delta3d)
+    install(FILES src/ng/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/vc-delta3d RENAME LICENSE-NG)
     install(TARGETS vc_delta3d
         EXPORT vc_delta3dTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

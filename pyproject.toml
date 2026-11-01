@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vc-delta3d"
-version = "0.2.0"
+version = "0.3.0"
 description = "Fast compression for three-dimensional (optionally multi-channel) 8- and 16-bit integer fields"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,7 +16,7 @@ dependencies = [
     "numcodecs>=0.15.1",
 ]
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "src/ng/LICENSE"]
 authors = [
     { name = "ScrollPrize contributors" },
 ]

@@ -81,7 +81,11 @@ namespace vc_delta3d {
 // neighbors outside the chunk as 0.
 
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
-enum class Predictor { Delta = 1, Lpc = 2 };
+// Delta/Lpc explicitly retain the legacy algorithm and version-1 frame.
+// Modern presets emit NCF1/HGT3 for scalar cubes and NGC1 for indexed spatial
+// or channel partitions. No legacy fallback: lossless uint8 and32-grid only.
+enum class Predictor { Delta = 1, Lpc = 2, Fast = 3, Medium = 4,
+                       Slow = 5, Slower = 6, TooSlow = 7 };
 
 // Multi-channel chunks (format version 2) are a container of independent
 // version-1 payloads, one per channel, each coding that channel's z, y, x
@@ -129,20 +133,23 @@ inline constexpr int kLpcMinDim = 16;
 
 // Compresses one decoded chunk of shapeZYX elements of elemSize bytes.
 // quantBinWidth 1 is lossless; larger widths quantize first (see above).
+// Modern presets require elemSize=1, quant=1 and32-aligned dimensions;
+// non-cubic/large shapes use the NGC1 indexed spatial container.
 // Throws std::invalid_argument unless input.size() equals z*y*x*elemSize
 // with elemSize 1 or 2, and quantBinWidth is in [1, 255].
 std::vector<std::byte> compress(std::span<const std::byte> input,
                                 std::array<int, 3> shapeZYX,
                                 std::size_t elemSize,
                                 int quantBinWidth = kQuantizationLossless,
-                                Predictor predictor = Predictor::Delta);
+                                Predictor predictor = Predictor::Fast);
 
 // Predictor recorded in a D3D1 payload, or std::nullopt if input is not a
 // D3D1 payload.
 std::optional<Predictor> predictor(std::span<const std::byte> input);
 
 // Compresses one chunk of `channels` fields of shapeZYX elements, laid out as
-// `layout` says, into a version-2 container (see above). quantBinWidth and
+// `layout` says, into NGC1 for modern presets or the legacy version-2 D3D1
+// container for explicit Delta/Lpc. The two paths do not mix. quantBinWidth and
 // predictor apply to every channel. Throws std::invalid_argument unless
 // input.size() equals channels*z*y*x*elemSize with channels >= 1 and elemSize
 // 1 or 2.
@@ -152,12 +159,16 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
                                         ChannelLayout layout,
                                         std::size_t elemSize,
                                         int quantBinWidth = kQuantizationLossless,
-                                        Predictor predictor = Predictor::Delta);
+                                        Predictor predictor = Predictor::Fast);
 
-// Channel count of a payload: 1 for a version-1 payload, C for a version-2
-// container, std::nullopt if input is neither. The decoded size of a payload
+// Channel count:1 for scalar D3D1/NCF1/HGT3; C for D3D1-v2 or NGC1;
+// std::nullopt for unsupported/malformed headers. The decoded size of a payload
 // is channels * z * y * x * elementSize.
 std::optional<int> channelCount(std::span<const std::byte> input);
+
+// Reads decoded byte count from either legacy or modern frame metadata.
+// No predictor preset is needed. Invalid/unsupported headers return nullopt.
+std::optional<std::size_t> decodedSize(std::span<const std::byte> input);
 
 // In-place near-lossless quantization as applied by compress: snaps
 // each element to the nearest multiple of quantBinWidth (clamped to the
@@ -179,7 +190,7 @@ std::optional<int> quantization(std::span<const std::byte> input);
 // tell whether re-encoding a payload could still shrink it.
 std::optional<int> deltaMask(std::span<const std::byte> input);
 
-// Decompresses a D3D1 payload (version 1 or a version-2 container) whose
+// Decompresses D3D1(version1/2), NCF1/HGT3, or NGC1 whose
 // decoded size must equal expectedSize.
 // Returns std::nullopt on any error or size mismatch.
 std::optional<std::vector<std::byte>> decompress(

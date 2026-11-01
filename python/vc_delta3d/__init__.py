@@ -2,6 +2,10 @@
 
 from ._codec import (
     channel_count,
+    compress_indexed,
+    indexed_header_size,
+    read_index,
+    decode_indexed_leaf,
     compress,
     compress_array,
     compress_channels,
@@ -15,6 +19,10 @@ from .numcodecs import Delta3D, register
 __all__ = [
     "Delta3D",
     "channel_count",
+    "compress_indexed",
+    "indexed_header_size",
+    "read_index",
+    "decode_indexed_leaf",
     "compress",
     "compress_array",
     "compress_channels",

@@ -1,5 +1,37 @@
 # VC-Delta3D
 
+## Presets
+
+The default is now **fast**. The five presets are `fast`, `medium`, `slow`,
+`slower`, and `tooslow` (formerly Fast, Slow, RC1, RC2, RC3). Set
+`Delta3D(predictor="delta")` or `Predictor::Delta` to retain the old Delta
+algorithm **and** old version-1 frame; `lpc`/`Predictor::Lpc` also remains
+available. Decoding detects the frame; no preset setting is needed.
+
+Scalar cubes encoded with these presets emit **NCF1/HGT3 directly**, without an additional wrapper.
+Multi-channel chunks and spatially subdivided chunks use the **NGC1 indexed
+container**: an uncompressed tree/index followed by independent native leaves.
+Its header costs24bytes plus17per leaf and5per split; eight leaves cost195bytes.
+See [INDEXED_FORMAT.md](INDEXED_FORMAT.md) for byte layout, C++/Python APIs,
+custom per-channel partitions and independent byte-range leaf decoding.
+
+These presets require lossless uint8 and positive32-aligned dimensions. They
+never fall back to D3D1. Select `delta` or `lpc` explicitly for16-bit fields,
+quantization or incompatible shapes. Legacy D3D1 channel containers contain
+only legacy D3D1 payloads. Mixed old/new containers and the discarded version3
+wrapper are rejected. The two encoding paths are strictly separate.
+
+The native implementation is now owned by this repository in `src/ng`.
+See [AUTHORS.md](AUTHORS.md): **Chase Hendrick** authored original NG;
+**Sean Johnson** authored original Delta3D. Both MIT notices are retained.
+See [BENCHMARKS.md](BENCHMARKS.md) for all 18 channel/scale groups, combined
+compression ratios, and encode/decode speeds against Delta3D, NG, LPC,
+Blosc-LZ4, Blosc-Zstd and Zstd.
+
+## Legacy Delta/LPC
+
+The following algorithm and format description documents legacy Delta/LPC behavior.
+
 VC-Delta3D compresses three-dimensional `uint8`, `uint16`, `int8` and `int16`
 scalar fields, and multi-channel chunks whose channels are such fields.
 It combines optional bounded scalar quantization, a choice of two predictors
@@ -22,7 +54,7 @@ Each chunk is predicted from its already decoded voxels, and the prediction
 residuals are entropy-coded with order-0 rANS. The predictor is chosen when
 encoding and recorded in every chunk, so decoding needs no configuration.
 
-- **Delta** (default, `predictor="delta"`, C++ `vc_delta3d::Predictor::Delta`):
+- **Delta** (`predictor="delta"`, C++ `vc_delta3d::Predictor::Delta`):
   a Lorenzo delta filter. Each voxel is coded as its difference from its
   neighbours along the z, y and x axes; for 8-bit fields the encoder picks the
   subset of axes per chunk. Works for every supported type. The faster method.
@@ -47,7 +79,7 @@ predictor key is omitted for delta.
 auto encoded = vc_delta3d::compress(bytes, {z, y, x}, element_size);
 auto decoded = vc_delta3d::decompress(encoded, bytes.size());
 
-// Best compression (uint8):
+// Explicit legacy LPC (uint8):
 auto smaller = vc_delta3d::compress(bytes, {z, y, x}, 1, vc_delta3d::kQuantizationLossless,
                                     vc_delta3d::Predictor::Lpc);
 
@@ -68,11 +100,11 @@ codec = Delta3D(quant=1)
 encoded = codec.encode(array)
 decoded = codec.decode(encoded)
 
-# Best compression (uint8):
+# Explicit legacy LPC (uint8):
 codec = Delta3D(predictor="lpc")
 
-# 4D chunks with a channel axis ("first" or "last"); int8/int16 must stay lossless.
-codec = Delta3D(channel_axis="last")
+# Legacy 4D chunks (including int8/int16, which must stay lossless):
+codec = Delta3D(channel_axis="last", predictor="delta")
 ```
 
 On real 64- and 32-channel int8 embedding chunks (unit vectors with
