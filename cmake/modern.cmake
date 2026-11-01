@@ -9,6 +9,16 @@ target_sources(vc_delta3d PRIVATE src/indexed.cpp src/ng/volcodec_ng_lib.c
 target_compile_definitions(vc_delta3d PRIVATE VC_DELTA3D_MODERN=1)
 target_include_directories(vc_delta3d PRIVATE src src/ng "${VC_ZSTD_INCLUDE_DIR}")
 target_link_libraries(vc_delta3d PRIVATE "${VC_ZSTD_LIBRARY}" Threads::Threads)
+if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    # ClangCL does not automatically link compiler-rt's CPU detection state
+    # used by __builtin_cpu_supports in the SIMD dispatch paths.
+    execute_process(COMMAND "${CMAKE_C_COMPILER}" /clang:--print-runtime-dir
+        OUTPUT_VARIABLE VC_CLANG_RUNTIME_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    find_library(VC_CLANG_BUILTINS NAMES clang_rt.builtins-x86_64
+        PATHS "${VC_CLANG_RUNTIME_DIR}" NO_DEFAULT_PATH REQUIRED)
+    target_link_libraries(vc_delta3d PRIVATE "${VC_CLANG_BUILTINS}")
+endif()
 if(NOT MSVC)
     target_compile_options(vc_delta3d PRIVATE $<$<COMPILE_LANGUAGE:C>:-std=gnu2x> -ffp-contract=off)
     target_link_libraries(vc_delta3d PRIVATE m)
