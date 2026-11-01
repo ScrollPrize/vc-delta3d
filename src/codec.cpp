@@ -318,7 +318,21 @@ void ransBuildEncTable(const std::uint32_t freq[256], RansEncSym enc[256])
             // num = 2^(k+63) + (f-1): high 64 bits = 2^(k-1), low 64 bits =
             // (f-1). The quotient num/f provably fits in 64 bits (f > 2^(k-1)),
             // so the 128/64 -> 64 division is well-defined on both paths.
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && defined(__clang__)
+            // ClangCL lacks MSVC's _udiv128. Exact binary division here avoids
+            // a dependency on compiler-rt's 128-bit division helpers. The
+            // remainder stays below 2*f (f <= kRansM), so doubling is safe.
+            std::uint64_t rem = std::uint64_t{1} << (k - 1);
+            const std::uint64_t low = f - 1;
+            e.rcp = 0;
+            for (int bit = 63; bit >= 0; --bit) {
+                rem = (rem << 1) | ((low >> bit) & 1);
+                if (rem >= f) {
+                    rem -= f;
+                    e.rcp |= std::uint64_t{1} << bit;
+                }
+            }
+#elif defined(_MSC_VER)
             std::uint64_t ransRcpRem;
             e.rcp = _udiv128(std::uint64_t{1} << (k - 1),
                              static_cast<std::uint64_t>(f) - 1, f, &ransRcpRem);

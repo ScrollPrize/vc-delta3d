@@ -23,7 +23,9 @@ target_compile_features(vc_delta3d PUBLIC cxx_std_20)
 # The LPC fit solves its normal equations in double precision; no fused
 # multiply-adds keeps the fitted weights, and so the payload bytes, identical
 # across platforms (GCC contracts by default on aarch64).
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(vc_delta3d PRIVATE /clang:-ffp-contract=off)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vc_delta3d PRIVATE -ffp-contract=off)
 endif()
 target_include_directories(vc_delta3d
