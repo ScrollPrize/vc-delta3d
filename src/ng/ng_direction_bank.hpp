@@ -228,7 +228,7 @@ void bank_fixed_candidates(const uint8_t* __restrict src,std::vector<Bytes>& buf
     }
 }
 }
-extern "C" { thread_local int ng_bank_detail_enabled=0; }
+extern "C" { thread_local NG_TLS_CONSTINIT int ng_bank_detail_enabled=0; }
 extern "C" void ng_bank_encode_profile_enable(int enabled){bank_encode_profile_enabled=enabled;encoder_work_enabled=enabled;std::fill(encoder_work,encoder_work+14,0.);std::fill(bank_encode_times,bank_encode_times+8,0.);std::fill(bank_fit_times,bank_fit_times+5,0.);std::fill_n(bank_entropy_times,3,0.);std::fill_n(bank_regression_times,5,0.);}
 extern "C" void ng_bank_encode_profile_get(double*out){std::copy(bank_encode_times,bank_encode_times+8,out);}
 extern "C" void ng_bank_encode_work_get(double*out){std::copy(encoder_work,encoder_work+14,out);}

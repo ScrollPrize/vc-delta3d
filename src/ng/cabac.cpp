@@ -8,6 +8,8 @@
 #include <cstring>
 #include <future>
 #include <cstdio>
+#include <string>
+#include <stdexcept>
 
 namespace {
 using namespace ng_cabac;
