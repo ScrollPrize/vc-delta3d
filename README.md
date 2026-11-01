@@ -120,8 +120,10 @@ Source builds require the Zstd development headers and library, not just the
 `dnf install libzstd-devel` on Fedora/RHEL, `brew install zstd` on macOS,
 or `vcpkg install zstd:x64-windows-static-md` on Windows. For non-system
 prefixes, set `CMAKE_PREFIX_PATH` to the installation prefix. Wheel CI installs
-this dependency explicitly; Linux/macOS wheel repair bundles the shared library,
-and Windows links the static library with the dynamic MSVC runtime.
+this dependency explicitly. Linux wheel repair bundles the shared library;
+macOS links a checksum-pinned Zstd build targeting macOS 11 (Homebrew bottles
+require newer macOS), and Windows links the static library with the dynamic
+MSVC runtime.
 
 ```sh
 cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release
