@@ -11,7 +11,7 @@ from vc_delta3d import (
 def test_roundtrip_and_registration():
     source = np.arange(4 * 5 * 6, dtype=np.uint16).reshape(4, 5, 6)
 
-    codec = Delta3D()
+    codec = Delta3D(predictor="delta")
     encoded = codec.encode(source)
     assert encoded[:4] == b"D3D1"
     decoded = np.frombuffer(codec.decode(encoded), dtype=np.uint16)
@@ -21,7 +21,7 @@ def test_roundtrip_and_registration():
 
 def test_decode_into():
     source = np.arange(3 * 4 * 5, dtype=np.uint8).reshape(3, 4, 5)
-    codec = Delta3D()
+    codec = Delta3D(predictor="delta")
     output = np.empty_like(source)
     assert codec.decode(codec.encode(source), out=output) is output
     np.testing.assert_array_equal(output, source)
@@ -29,7 +29,7 @@ def test_decode_into():
 
 def test_alternate_wire_magic():
     source = np.arange(3 * 4 * 5, dtype=np.uint8).reshape(3, 4, 5)
-    encoded = Delta3D().encode(source)
+    encoded = Delta3D(predictor="delta").encode(source)
     alternate = b"ALT1" + encoded[4:]
 
     decoded = decompress_with_magic(alternate, source.nbytes, b"ALT1")
@@ -50,7 +50,7 @@ def test_concurrent_roundtrip():
         rng.integers(0, 4096, size=(16, 32, 32), dtype=np.uint16)
         for _ in range(32)
     ]
-    codec = Delta3D()
+    codec = Delta3D(predictor="delta")
 
     def roundtrip(chunk):
         decoded = np.frombuffer(codec.decode(codec.encode(chunk)), np.uint16)
@@ -85,15 +85,15 @@ def test_lpc_roundtrip_and_config():
     codec = Delta3D(predictor="lpc")
     encoded = codec.encode(source)
     assert encoded[7] == 2  # LPC predictor marker
-    assert len(encoded) < len(Delta3D().encode(source))
+    assert len(encoded) < len(Delta3D(predictor="delta").encode(source))
     decoded = np.frombuffer(codec.decode(encoded), dtype=np.uint8)
     np.testing.assert_array_equal(decoded.reshape(source.shape), source)
 
     config = codec.get_config()
     assert config == {"id": "vc-delta3d", "quant": 1, "predictor": "lpc"}
     assert numcodecs.get_codec(config).predictor == "lpc"
-    # The default keeps the metadata existing arrays carry.
-    assert Delta3D().get_config() == {"id": "vc-delta3d", "quant": 1}
+    # Explicit new default prevents older readers silently encoding Delta.
+    assert Delta3D().get_config() == {"id": "vc-delta3d", "quant": 1, "predictor": "fast"}
 
 
 def test_lpc_payload_is_identical_on_every_platform():
@@ -125,7 +125,7 @@ def test_lpc_concurrent_roundtrip():
 
 def test_signed_chunks_roundtrip_losslessly():
     source = (np.arange(4 * 5 * 6) % 37 - 18).astype(np.int8).reshape(4, 5, 6)
-    codec = Delta3D()
+    codec = Delta3D(predictor="delta")
     decoded = np.frombuffer(codec.decode(codec.encode(source)), dtype=np.int8).reshape(source.shape)
     np.testing.assert_array_equal(decoded, source)
     try:
@@ -143,7 +143,7 @@ def test_channel_axis_roundtrip_and_config():
         for dtype in (np.int8, np.uint8, np.int16, np.uint16):
             fields = np.stack([(base + 9 * c) for c in range(5)], axis=0 if axis == "first" else -1)
             source = fields.astype(dtype)
-            codec = Delta3D(channel_axis=axis)
+            codec = Delta3D(predictor="delta", channel_axis=axis)
             encoded = codec.encode(source)
             assert encoded[4] == 2
             output = np.empty_like(source)
@@ -161,7 +161,7 @@ def test_lpc_with_channel_axis():
     codec = Delta3D(predictor="lpc", channel_axis="last")
     encoded = codec.encode(source)
     assert encoded[4] == 2
-    assert len(encoded) < len(Delta3D(channel_axis="last").encode(source))
+    assert len(encoded) < len(Delta3D(predictor="delta", channel_axis="last").encode(source))
     output = np.empty_like(source)
     codec.decode(encoded, out=output)
     np.testing.assert_array_equal(output, source)
@@ -174,6 +174,6 @@ def test_channel_axis_compresses_smooth_channels_better_than_interleaving():
     rng = np.random.default_rng(1)
     base = np.cumsum(np.cumsum(np.cumsum(rng.integers(-1, 2, size=(32, 32, 32)), 0), 1), 2)
     fields = np.stack([(base * (c + 1)) % 200 for c in range(16)], axis=-1).astype(np.uint8)
-    per_channel = len(Delta3D(channel_axis="last").encode(fields))
-    interleaved = len(Delta3D().encode(np.ascontiguousarray(fields.reshape(32, 32, 32 * 16))))
+    per_channel = len(Delta3D(predictor="delta", channel_axis="last").encode(fields))
+    interleaved = len(Delta3D(predictor="delta").encode(np.ascontiguousarray(fields.reshape(32, 32, 32 * 16))))
     assert per_channel < interleaved

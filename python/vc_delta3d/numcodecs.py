@@ -12,8 +12,13 @@ class Delta3D(numcodecs.abc.Codec):
     """Compress a 3D uint8/uint16/int8/int16 chunk, or a 4D one with a channel axis.
 
     ``channel_axis`` ("first" or "last") codes each channel's z, y, x field on its
-    own (a version-2 container); leave it unset for 3D chunks. Signed values are
+    own; leave it unset for 3D chunks. Signed values are
     coded as their bytes and must stay lossless (``quant=1``).
+
+    Presets default to ``fast``. For 16-bit data, quantization, or spatial
+    dimensions not divisible by 32, they automatically use legacy Delta3D
+    encoding and its complete D3D1 framing (including multi-channel containers).
+    Supported inputs use the preset's native framing. Decoding detects either.
 
     ``predictor="lpc"`` fits a per-chunk linear predictor to 8-bit fields of
     at least 16 voxels along every axis: smaller payloads, slower encode and
@@ -28,15 +33,15 @@ class Delta3D(numcodecs.abc.Codec):
         self,
         codec: str = "rans",
         quant: int = 1,
-        predictor: str = "delta",
+        predictor: str = "fast",
         channel_axis: str | None = None,
     ):
         if codec != "rans":
             raise ValueError("vc-delta3d only supports rANS entropy coding")
         if not 1 <= int(quant) <= 255:
             raise ValueError("quant must be in [1, 255]")
-        if predictor not in ("delta", "lpc"):
-            raise ValueError("predictor must be 'delta' or 'lpc'")
+        if predictor not in ("delta", "lpc", "fast", "medium", "slow", "slower", "tooslow"):
+            raise ValueError("unknown predictor/preset")
         if channel_axis not in (None, "first", "last"):
             raise ValueError('channel_axis must be None, "first" or "last"')
         self.quant = int(quant)
@@ -79,9 +84,8 @@ class Delta3D(numcodecs.abc.Codec):
 
     def get_config(self):
         config = {"id": self.codec_id, "quant": self.quant}
-        # Omitted for the defaults so existing array metadata stays unchanged.
-        if self.predictor != "delta":
-            config["predictor"] = self.predictor
+        # Explicit even for fast: old readers must not silently encode delta.
+        config["predictor"] = self.predictor
         if self.channel_axis is not None:
             config["channel_axis"] = self.channel_axis
         return config
@@ -93,23 +97,12 @@ def register() -> None:
     numcodecs.register_codec(Delta3D)
 
 
-def _shape(payload) -> tuple[int, int, int]:
-    if len(payload) < 20 or payload[:4] != b"D3D1":
-        raise ValueError("not a VC-Delta3D payload")
-    return (
-        int.from_bytes(payload[8:12], "little"),
-        int.from_bytes(payload[12:16], "little"),
-        int.from_bytes(payload[16:20], "little"),
-    )
-
-
 def _decoded_size(payload) -> int:
-    """Bytes a payload decodes to: channels * z * y * x * element size."""
-    z, y, x = _shape(payload)
-    channels = _codec.channel_count(payload)
-    if channels is None:
+    """Read the native frame's own metadata; no additional envelope."""
+    size = _codec.decoded_size(payload)
+    if size is None:
         raise ValueError("not a VC-Delta3D payload")
-    return channels * z * y * x * payload[5]
+    return size
 
 
 register()

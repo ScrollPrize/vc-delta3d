@@ -1,4 +1,7 @@
 #include <vc_delta3d/codec.hpp>
+#ifdef VC_DELTA3D_MODERN
+#include <vc_delta3d/indexed.hpp>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -7,6 +10,14 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+
+#ifdef VC_DELTA3D_MODERN
+extern "C" int vc_ng_preset_encode(const unsigned char*, unsigned, unsigned,
+    unsigned char*, std::size_t, std::size_t*);
+extern "C" int vc_ng_preset_decode(const unsigned char*, std::size_t,
+    unsigned char*, std::size_t);
+extern "C" unsigned vc_ng_frame_dimension(const unsigned char*, std::size_t);
+#endif
 
 #if defined(_MSC_VER)
 #include <intrin.h>   // __umulh / _udiv128 for the 128-bit rANS reciprocal math
@@ -307,7 +318,21 @@ void ransBuildEncTable(const std::uint32_t freq[256], RansEncSym enc[256])
             // num = 2^(k+63) + (f-1): high 64 bits = 2^(k-1), low 64 bits =
             // (f-1). The quotient num/f provably fits in 64 bits (f > 2^(k-1)),
             // so the 128/64 -> 64 division is well-defined on both paths.
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && defined(__clang__)
+            // ClangCL lacks MSVC's _udiv128. Exact binary division here avoids
+            // a dependency on compiler-rt's 128-bit division helpers. The
+            // remainder stays below 2*f (f <= kRansM), so doubling is safe.
+            std::uint64_t rem = std::uint64_t{1} << (k - 1);
+            const std::uint64_t low = f - 1;
+            e.rcp = 0;
+            for (int bit = 63; bit >= 0; --bit) {
+                rem = (rem << 1) | ((low >> bit) & 1);
+                if (rem >= f) {
+                    rem -= f;
+                    e.rcp |= std::uint64_t{1} << bit;
+                }
+            }
+#elif defined(_MSC_VER)
             std::uint64_t ransRcpRem;
             e.rcp = _udiv128(std::uint64_t{1} << (k - 1),
                              static_cast<std::uint64_t>(f) - 1, f, &ransRcpRem);
@@ -348,7 +373,8 @@ std::vector<std::byte> ransCompressFrame(std::span<const std::byte> input,
     ransBuildEncTable(freq, enc);
 
     // Worst case is ~1.5 bytes/symbol (12-bit code ceiling); 2n is safe.
-    const std::size_t streamCap = 2 * n + kRansStateBytes + 64;
+    const bool constant = std::find(freq, freq + 256, kRansM) != freq + 256;
+    const std::size_t streamCap = (constant ? 0 : 2 * n) + kRansStateBytes + 64;
     std::vector<std::byte> output(headerReserve + kRansTableBytes + streamCap);
     auto* base = reinterpret_cast<std::uint8_t*>(output.data());
 
@@ -365,7 +391,7 @@ std::vector<std::byte> ransCompressFrame(std::span<const std::byte> input,
     // Branchless renorm: speculatively store each lane's low word below the
     // claimed stream and only advance past it when the state actually
     // overflows; the buffer's slack keeps the speculative store in bounds.
-    std::size_t j = n;
+    std::size_t j = constant ? 0 : n;
     while (j & (kRansLanes - 1)) {
         --j;
         const RansEncSym& e = enc[in[j]];
@@ -432,7 +458,7 @@ bool ransDecompressFrame(std::span<const std::byte> frame,
         return false;
     // Fused per-slot entry: one L1 load yields symbol, freq-1 and
     // slot - cum (each fits 12/8 bits within a uint32).
-    static thread_local std::uint32_t slotEntry[kRansM];
+    std::uint32_t slotEntry[kRansM];
     for (int s = 0; s < 256; ++s)
         for (std::uint32_t j = 0; j < freq[s]; ++j)
             slotEntry[cum[s] + j] =
@@ -524,6 +550,15 @@ bool hasHeader(std::span<const std::byte> input,
            std::equal(expectedMagic.begin(), expectedMagic.end(),
                       input.begin()) &&
            static_cast<unsigned char>(input[4]) == kFormatVersion;
+}
+
+unsigned modernDimension(std::span<const std::byte> input)
+{
+#ifdef VC_DELTA3D_MODERN
+    return vc_ng_frame_dimension(reinterpret_cast<const unsigned char*>(input.data()),input.size());
+#else
+    return 0;
+#endif
 }
 
 // ---- LPC: per-chunk linear prediction from a per-chunk subset of the 62
@@ -1487,6 +1522,20 @@ std::optional<std::vector<std::byte>> compressLpc(
     return output;
 }
 
+// Select the complete legacy encoding path for inputs the presets cannot
+// represent. In particular, never put legacy leaves inside an NGC1 container.
+Predictor inputPredictor(Predictor requested, const std::array<int, 3>& shape,
+                         std::size_t elemSize, int quantBinWidth)
+{
+    if (requested < Predictor::Delta || requested > Predictor::TooSlow)
+        throw std::invalid_argument("unknown compression preset");
+    if (requested >= Predictor::Fast &&
+        (elemSize != 1 || quantBinWidth != 1 ||
+         std::any_of(shape.begin(), shape.end(), [](int d) { return d <= 0 || d % 32 != 0; })))
+        return Predictor::Delta;
+    return requested;
+}
+
 } // namespace
 
 std::vector<std::byte> compress(std::span<const std::byte> input,
@@ -1517,6 +1566,26 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
 
     std::vector<std::byte> filtered(input.begin(), input.end());
     quantize({filtered.data(), filtered.size()}, elemSize, quantBinWidth);
+
+    predictor = inputPredictor(predictor, shapeZYX, elemSize, quantBinWidth);
+#ifdef VC_DELTA3D_MODERN
+    if(predictor>=Predictor::Fast){
+        if(z!=y||y!=x||x>256)
+            return compressIndexed(input,shapeZYX,1,ChannelLayout::First,IndexedOptions{predictor,{}});
+    }
+    if (predictor >= Predictor::Fast && quantBinWidth == 1 && elemSize == 1 && z == y && y == x &&
+        x >= 32 && x <= 256 && x % 32 == 0) {
+        std::vector<std::byte> result(input.size() * 4 + 131072);
+        std::size_t written=0;
+        if(vc_ng_preset_encode(reinterpret_cast<const unsigned char*>(filtered.data()),
+            unsigned(x),unsigned(predictor)-3,
+            reinterpret_cast<unsigned char*>(result.data()),result.size(),&written))
+            throw std::runtime_error("modern preset encoding failed");
+        result.resize(written);return result;
+    }
+#endif
+    if(predictor>=Predictor::Fast)
+        throw std::invalid_argument("modern presets unavailable in this build");
 
     std::optional<std::vector<std::byte>> lpc;
     if (predictor == Predictor::Lpc && elemSize == 1 &&
@@ -1566,6 +1635,14 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
                                         int quantBinWidth,
                                         Predictor predictor)
 {
+    predictor = inputPredictor(predictor, shapeZYX, elemSize, quantBinWidth);
+#ifdef VC_DELTA3D_MODERN
+    if(predictor>=Predictor::Fast){
+        return compressIndexed(input,shapeZYX,channels,layout,IndexedOptions{predictor,{}});
+    }
+#endif
+    if(predictor!=Predictor::Delta&&predictor!=Predictor::Lpc)
+        throw std::invalid_argument("unsupported legacy predictor");
     if (channels < 1 || (elemSize != 1 && elemSize != 2) || shapeZYX[0] <= 0 ||
         shapeZYX[1] <= 0 || shapeZYX[2] <= 0 ||
         (layout != ChannelLayout::First && layout != ChannelLayout::Last))
@@ -1625,6 +1702,12 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
 
 std::optional<int> channelCount(std::span<const std::byte> input)
 {
+#ifdef VC_DELTA3D_MODERN
+    if(indexedHeaderSize(input)){
+        try{return int(readIndex(input,input.size()).channels);}catch(...){return std::nullopt;}
+    }
+#endif
+    if (modernDimension(input)) return 1;
     if (hasHeader(input, kWireMagic))
         return 1;
     if (hasContainerHeader(input, kWireMagic))
@@ -1646,8 +1729,38 @@ void quantize(std::span<std::byte> data,
                        data.size() / 2, quantBinWidth);
 }
 
+std::optional<std::size_t> decodedSize(std::span<const std::byte> input)
+{
+#ifdef VC_DELTA3D_MODERN
+    if(indexedHeaderSize(input)){
+        try{return size_t(readIndex(input,input.size()).decodedBytes);}catch(...){return std::nullopt;}
+    }
+#endif
+    if (const unsigned d=modernDimension(input)) return size_t(d)*d*d;
+    if (!hasHeader(input,kWireMagic)&&!hasContainerHeader(input,kWireMagic))return std::nullopt;
+    size_t size=static_cast<unsigned>(input[5]);
+    if(size!=1&&size!=2)return std::nullopt;
+    for(unsigned off:{8u,12u,16u}) {
+        auto d=readU32(input.data()+off);
+        if(!d||size>std::numeric_limits<size_t>::max()/d)return std::nullopt;
+        size*=d;
+    }
+    if(hasContainerHeader(input,kWireMagic)) {
+        auto c=readU32(input.data()+20);
+        if(!c||size>std::numeric_limits<size_t>::max()/c)return std::nullopt;
+        size*=c;
+    }
+    return size;
+}
+
 std::optional<int> quantization(std::span<const std::byte> input)
 {
+#ifdef VC_DELTA3D_MODERN
+    if(indexedHeaderSize(input)){
+        try{readIndex(input,input.size());return 1;}catch(...){return std::nullopt;}
+    }
+#endif
+    if (modernDimension(input)) return 1;
     if (!hasHeader(input, kWireMagic) && !hasContainerHeader(input, kWireMagic))
         return std::nullopt;
     return std::max(1, static_cast<int>(input[6]));
@@ -1673,6 +1786,9 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
                              std::span<std::byte> output,
                              const WireMagic& expectedMagic)
 {
+#ifdef VC_DELTA3D_MODERN
+    if(expectedMagic==kWireMagic&&indexedHeaderSize(input))return decompressIndexedInto(input,output);
+#endif
     if (hasContainerHeader(input, expectedMagic))
         return decompressContainer(input, output);
     return decompressSingle(input, output, expectedMagic);
@@ -1684,6 +1800,15 @@ bool decompressSingle(std::span<const std::byte> input,
                       std::span<std::byte> output,
                       const WireMagic& expectedMagic)
 {
+#ifdef VC_DELTA3D_MODERN
+    if (expectedMagic==kWireMagic) {
+        if (const unsigned d=modernDimension(input)) {
+            if(output.size()!=size_t(d)*d*d)return false;
+            return vc_ng_preset_decode(reinterpret_cast<const unsigned char*>(input.data()),
+                input.size(),reinterpret_cast<unsigned char*>(output.data()),output.size())==0;
+        }
+    }
+#endif
     if (!hasHeader(input, expectedMagic))
         return false;
 
