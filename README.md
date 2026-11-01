@@ -124,6 +124,8 @@ this dependency explicitly. Linux wheel repair bundles the shared library;
 macOS links a checksum-pinned Zstd build targeting macOS 11 (Homebrew bottles
 require newer macOS), and Windows links the static library with the dynamic
 MSVC runtime.
+Windows preset builds use the Visual Studio ClangCL toolset because the C
+kernels use variable-length arrays, which the MSVC C compiler does not support.
 
 ```sh
 cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release

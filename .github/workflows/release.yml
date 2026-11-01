@@ -62,6 +62,8 @@ jobs:
           & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install zstd:x64-windows-static-md
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "CMAKE_PREFIX_PATH=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # NG's C kernels use C99 variable-length arrays; MSVC C does not support them.
+          "CMAKE_GENERATOR_TOOLSET=ClangCL" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and test wheels
         uses: pypa/cibuildwheel@v4.1.1
