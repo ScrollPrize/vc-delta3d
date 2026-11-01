@@ -82,8 +82,9 @@ namespace vc_delta3d {
 
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
 // Delta/Lpc explicitly retain the legacy algorithm and version-1 frame.
-// Modern presets emit NCF1/HGT3 for scalar cubes and NGC1 for indexed spatial
-// or channel partitions. No legacy fallback: lossless uint8 and32-grid only.
+// Presets emit NCF1/HGT3 for scalar cubes and NGC1 for indexed spatial/channel
+// partitions. Regular APIs fall back to legacy Delta/D3D1 for 16-bit data,
+// quantization, or dimensions not divisible by32; invalid inputs still fail.
 enum class Predictor { Delta = 1, Lpc = 2, Fast = 3, Medium = 4,
                        Slow = 5, Slower = 6, TooSlow = 7 };
 

@@ -91,14 +91,15 @@ def test_malformed_index_and_range_payload():
         with pytest.raises(RuntimeError):decode_indexed_leaf(b,l)
     with pytest.raises((ValueError,RuntimeError)):Delta3D().decode(f[:-1])
 
-def test_no_mixed_legacy_container_or_implicit_fallback():
+def test_no_mixed_legacy_container():
     a=np.zeros((32,32,32),np.uint8)
     native=Delta3D().encode(a)
     mixed=struct.pack('<4sBBBBIIII',b'D3D1',2,1,1,0,32,32,32,1)+struct.pack('<I',len(native))+native
     with pytest.raises((ValueError,RuntimeError)):Delta3D().decode(mixed)
-    for data,kwargs in [(np.zeros((16,32,32),np.uint8),{}),(a.astype(np.uint16),{}),(a,{'quant':3})]:
-        with pytest.raises(ValueError):Delta3D(**kwargs).encode(data)
-        old=Delta3D(predictor='delta',**kwargs);old.decode(old.encode(data))
+
+def test_explicit_indexed_api_still_requires_valid_partition_geometry():
+    # Explicit indexing cannot silently discard the requested tree or emit D3D1.
+    with pytest.raises(ValueError):encode(np.zeros((16,32,32),np.uint8))
 
 def test_header_extension_and_64bit_ranges():
     f=compress_indexed(bytes(256*32**3),32,32,32,256)

@@ -58,7 +58,7 @@ VC_DELTA3D_INSTALL_CPP = "OFF"
 build = "cp{312,313,314}-*"
 skip = "*-musllinux_*"
 test-requires = ["pytest"]
-test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py"
+test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py {project}/tests/test_fallback.py"
 audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
 

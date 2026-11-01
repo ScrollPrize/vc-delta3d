@@ -1522,6 +1522,20 @@ std::optional<std::vector<std::byte>> compressLpc(
     return output;
 }
 
+// Select the complete legacy encoding path for inputs the presets cannot
+// represent. In particular, never put legacy leaves inside an NGC1 container.
+Predictor inputPredictor(Predictor requested, const std::array<int, 3>& shape,
+                         std::size_t elemSize, int quantBinWidth)
+{
+    if (requested < Predictor::Delta || requested > Predictor::TooSlow)
+        throw std::invalid_argument("unknown compression preset");
+    if (requested >= Predictor::Fast &&
+        (elemSize != 1 || quantBinWidth != 1 ||
+         std::any_of(shape.begin(), shape.end(), [](int d) { return d <= 0 || d % 32 != 0; })))
+        return Predictor::Delta;
+    return requested;
+}
+
 } // namespace
 
 std::vector<std::byte> compress(std::span<const std::byte> input,
@@ -1553,14 +1567,9 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
     std::vector<std::byte> filtered(input.begin(), input.end());
     quantize({filtered.data(), filtered.size()}, elemSize, quantBinWidth);
 
-    if (predictor < Predictor::Delta || predictor > Predictor::TooSlow)
-        throw std::invalid_argument("unknown compression preset");
+    predictor = inputPredictor(predictor, shapeZYX, elemSize, quantBinWidth);
 #ifdef VC_DELTA3D_MODERN
     if(predictor>=Predictor::Fast){
-        if(elemSize!=1||quantBinWidth!=1)
-            throw std::invalid_argument("modern presets require lossless uint8; select delta/lpc for legacy types/quantization");
-        for(auto d:shapeZYX)if(d%32)
-            throw std::invalid_argument("modern dimensions must be multiples of32; no legacy fallback");
         if(z!=y||y!=x||x>256)
             return compressIndexed(input,shapeZYX,1,ChannelLayout::First,IndexedOptions{predictor,{}});
     }
@@ -1626,10 +1635,9 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
                                         int quantBinWidth,
                                         Predictor predictor)
 {
+    predictor = inputPredictor(predictor, shapeZYX, elemSize, quantBinWidth);
 #ifdef VC_DELTA3D_MODERN
     if(predictor>=Predictor::Fast){
-        if(elemSize!=1||quantBinWidth!=1)
-            throw std::invalid_argument("modern indexed chunks require lossless uint8; select delta/lpc explicitly");
         return compressIndexed(input,shapeZYX,channels,layout,IndexedOptions{predictor,{}});
     }
 #endif

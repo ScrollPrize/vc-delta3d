@@ -31,10 +31,15 @@ int main() {
             ng_set_isa_limit(256);assert(decodeIndexedLeaf(payload,leaf,out));ng_set_isa_limit(0);
         }
     }
-    bool rejected=false;try{compress(a,{16,32,64},1);}catch(const std::invalid_argument&){rejected=true;}assert(rejected);
-    auto f=compress(a,{16,32,64},1,1,Predictor::Delta);assert(f[4]==std::byte{1});
+    auto f=compress(a,{16,32,64},1);assert(f[4]==std::byte{1});
+    assert(f==compress(a,{16,32,64},1,1,Predictor::Delta));
     assert(decompress(f,a.size())==a);
-    auto q=compress(a,{32,32,32},1,3,Predictor::Delta);quantize(a,1,3);
+    assert(compress(a,{32,32,32},1,3)==compress(a,{32,32,32},1,3,Predictor::Delta));
+    assert(compress(both,{32,32,32},2)==compress(both,{32,32,32},2,1,Predictor::Delta));
+    for(auto layout:{ChannelLayout::First,ChannelLayout::Last})
+        assert(compressChannels(both,{16,32,64},2,layout,1)==
+               compressChannels(both,{16,32,64},2,layout,1,1,Predictor::Delta));
+    auto q=compress(a,{32,32,32},1,3);quantize(a,1,3);
     assert(decompress(q,a.size())==a&&quantization(q)==3);
-    std::cout<<"PASS default, all presets, legacy, indexed channels, strict rejection, quantization, AVX2\n";
+    std::cout<<"PASS default, all presets, legacy fallback, indexed channels, quantization, AVX2\n";
 }

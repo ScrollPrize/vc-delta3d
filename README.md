@@ -15,11 +15,14 @@ Its header costs24bytes plus17per leaf and5per split; eight leaves cost195bytes.
 See [INDEXED_FORMAT.md](INDEXED_FORMAT.md) for byte layout, C++/Python APIs,
 custom per-channel partitions and independent byte-range leaf decoding.
 
-These presets require lossless uint8 and positive32-aligned dimensions. They
-never fall back to D3D1. Select `delta` or `lpc` explicitly for16-bit fields,
-quantization or incompatible shapes. Legacy D3D1 channel containers contain
-only legacy D3D1 payloads. Mixed old/new containers and the discarded version3
-wrapper are rejected. The two encoding paths are strictly separate.
+These presets operate on lossless 8-bit chunks with positive dimensions that
+are multiples of 32. The regular encoding APIs automatically use legacy
+Delta3D for 16-bit fields, quantization, or other positive chunk shapes.
+The fallback emits the complete legacy D3D1 format, including the legacy
+container for multi-channel input; it never mixes old and new formats.
+Explicit `delta` and `lpc` retain their existing behavior. Invalid inputs still
+raise errors. The explicit `compressIndexed` API remains strict because its
+requested partition must be representable in NGC1.
 
 The native implementation is now owned by this repository in `src/ng`.
 See [AUTHORS.md](AUTHORS.md): **Chase Hendrick** authored original NG;

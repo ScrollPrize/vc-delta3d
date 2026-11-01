@@ -12,8 +12,13 @@ class Delta3D(numcodecs.abc.Codec):
     """Compress a 3D uint8/uint16/int8/int16 chunk, or a 4D one with a channel axis.
 
     ``channel_axis`` ("first" or "last") codes each channel's z, y, x field on its
-    own (a version-2 container); leave it unset for 3D chunks. Signed values are
+    own; leave it unset for 3D chunks. Signed values are
     coded as their bytes and must stay lossless (``quant=1``).
+
+    Presets default to ``fast``. For 16-bit data, quantization, or spatial
+    dimensions not divisible by 32, they automatically use legacy Delta3D
+    encoding and its complete D3D1 framing (including multi-channel containers).
+    Supported inputs use the preset's native framing. Decoding detects either.
 
     ``predictor="lpc"`` fits a per-chunk linear predictor to 8-bit fields of
     at least 16 voxels along every axis: smaller payloads, slower encode and

@@ -65,8 +65,12 @@ The decoder validates header lengths, integer products, geometry, split
 alignment, exact tree coverage, leaf codec IDs and payload ranges before
 decoding. The traversal uses a heap stack, not recursive calls on untrusted
 tree depth. Invalid partitions are rejected before encoder model fitting.
-No implicit fallback to D3D1 for modern encodes: unsupported types, dimensions,
-or quantization are errors. Select `delta` or `lpc` explicitly for legacy data.
+The regular `compress`/`compressChannels` APIs automatically choose the complete
+legacy Delta3D path for 16-bit data, quantized data, or positive dimensions not
+divisible by 32. This produces D3D1, never an NGC1 container with legacy leaves.
+Invalid types, shapes, sizes and quantization settings still raise errors.
+The explicit `compressIndexed` API does not fall back: incompatible geometry
+or partition requests are errors. Explicit `delta`/`lpc` behavior is unchanged.
 D3D1 version2 accepts only legacy D3D1 scalar children; mixed old/new containers
 and the discarded D3D1 version3 envelope are rejected.
 
