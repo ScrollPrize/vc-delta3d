@@ -1,4 +1,5 @@
 #include <vc_delta3d/codec.hpp>
+#include "delta_filter.h"
 #ifdef VC_DELTA3D_MODERN
 #include <vc_delta3d/indexed.hpp>
 #endif
@@ -48,192 +49,29 @@ constexpr std::size_t kContainerHeaderSize = 24;
 // per-chunk selection and what non-selected payloads still use.
 constexpr unsigned kDeltaMaskZyx = 7;
 
-// In-place backward difference along each axis in `mask`, z then y then x.
-// Iterating each pass from the end keeps every subtraction reading
-// not-yet-filtered values; the element-wise arithmetic wraps mod 2^8/2^16,
-// so the inverse is exact. The passes commute, so the order is only a
-// convention shared with deltaUnfilter.
+// Temporary C++ adapters while frame orchestration moves to C. Both the
+// legacy encoder and the NG bridge use the same C implementation.
 template <typename T>
-void deltaFilter(T* data, std::size_t z, std::size_t y, std::size_t x,
-                 unsigned mask)
+void deltaFilter(T* p, std::size_t z, std::size_t y, std::size_t x, unsigned mask)
 {
-    const std::size_t slice = y * x;
-    const std::size_t n = z * slice;
-    if (mask & 4)
-        for (std::size_t i = n; i-- > slice;)
-            data[i] = static_cast<T>(data[i] - data[i - slice]);
-    if (mask & 2)
-        for (std::size_t s = 0; s < z; ++s) {
-            T* p = data + s * slice;
-            for (std::size_t i = slice; i-- > x;)
-                p[i] = static_cast<T>(p[i] - p[i - x]);
-        }
-    if (mask & 1)
-        for (std::size_t r = 0; r < z * y; ++r) {
-            T* p = data + r * x;
-            for (std::size_t i = x; i-- > 1;)
-                p[i] = static_cast<T>(p[i] - p[i - 1]);
-        }
+    if constexpr (sizeof(T) == 1) vc_delta_filter_u8(p, z, y, x, mask);
+    else vc_delta_filter_u16(p, z, y, x, mask);
 }
-
-// Inclusive prefix sum over one row of uint8 (log-step shift-adds per
-// 16-byte vector, then a running carry across vectors). Wrap-around adds
-// match the scalar path exactly.
-#if defined(__ARM_NEON)
-#define VC_DELTA3D_PREFIX_U8 1
-inline void prefixSumRowU8(std::uint8_t* p, std::size_t x)
-{
-    const uint8x16_t zero = vdupq_n_u8(0);
-    uint8x16_t carry = zero;
-    std::size_t i = 0;
-    for (; i + 16 <= x; i += 16) {
-        uint8x16_t v = vld1q_u8(p + i);
-        v = vaddq_u8(v, vextq_u8(zero, v, 15));
-        v = vaddq_u8(v, vextq_u8(zero, v, 14));
-        v = vaddq_u8(v, vextq_u8(zero, v, 12));
-        v = vaddq_u8(v, vextq_u8(zero, v, 8));
-        v = vaddq_u8(v, carry);
-        vst1q_u8(p + i, v);
-        carry = vdupq_laneq_u8(v, 15);
-    }
-    std::uint8_t c = vgetq_lane_u8(carry, 0);
-    for (; i < x; ++i) {
-        c = static_cast<std::uint8_t>(p[i] + c);
-        p[i] = c;
-    }
-}
-#elif defined(__SSE2__)
-#define VC_DELTA3D_PREFIX_U8 1
-inline void prefixSumRowU8(std::uint8_t* p, std::size_t x)
-{
-    __m128i carry = _mm_setzero_si128();
-    std::size_t i = 0;
-    for (; i + 16 <= x; i += 16) {
-        __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + i));
-        v = _mm_add_epi8(v, _mm_slli_si128(v, 1));
-        v = _mm_add_epi8(v, _mm_slli_si128(v, 2));
-        v = _mm_add_epi8(v, _mm_slli_si128(v, 4));
-        v = _mm_add_epi8(v, _mm_slli_si128(v, 8));
-        v = _mm_add_epi8(v, carry);
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(p + i), v);
-        carry = _mm_set1_epi8(
-            static_cast<char>(_mm_extract_epi16(v, 7) >> 8));
-    }
-    auto c = static_cast<std::uint8_t>(_mm_cvtsi128_si32(carry));
-    for (; i < x; ++i) {
-        c = static_cast<std::uint8_t>(p[i] + c);
-        p[i] = c;
-    }
-}
-#endif
-
-// Inverse: forward prefix sums along x, then y, then z.
 template <typename T>
-void deltaUnfilter(T* data, std::size_t z, std::size_t y, std::size_t x,
-                   unsigned mask)
+void deltaUnfilter(T* p, std::size_t z, std::size_t y, std::size_t x, unsigned mask)
 {
-    const std::size_t slice = y * x;
-    const std::size_t n = z * slice;
-    if (mask & 1)
-        for (std::size_t r = 0; r < z * y; ++r) {
-            T* p = data + r * x;
-#if defined(VC_DELTA3D_PREFIX_U8)
-            if constexpr (sizeof(T) == 1) {
-                prefixSumRowU8(reinterpret_cast<std::uint8_t*>(p), x);
-                continue;
-            }
-#endif
-            for (std::size_t i = 1; i < x; ++i)
-                p[i] = static_cast<T>(p[i] + p[i - 1]);
-        }
-    if (mask & 2)
-        for (std::size_t s = 0; s < z; ++s) {
-            T* p = data + s * slice;
-            for (std::size_t i = x; i < slice; ++i)
-                p[i] = static_cast<T>(p[i] + p[i - x]);
-        }
-    if (mask & 4)
-        for (std::size_t i = slice; i < n; ++i)
-            data[i] = static_cast<T>(data[i] + data[i - slice]);
+    if constexpr (sizeof(T) == 1) vc_delta_unfilter_u8(p, z, y, x, mask);
+    else vc_delta_unfilter_u16(p, z, y, x, mask);
 }
-
-// Picks the delta-axis mask with the lowest order-0 residual entropy. Each
-// difference pass cancels smooth structure but doubles white-noise variance,
-// so on noise-dominated chunks fewer passes often beat the full cascade; the
-// winner varies chunk to chunk, hence measuring instead of guessing. One
-// pass over every 4th z-slice histograms all eight subsets at once via the
-// Lorenzo-corner identity (the residual of any axis subset is the
-// alternating sum over the corresponding neighbor corners); entropy of the
-// subsampled histogram tracks the full-chunk rANS size closely enough that
-// this recovers nearly all of the exhaustive gain. Requires all dims >= 2.
-unsigned selectDeltaMask(const std::uint8_t* q,
-                         std::size_t z,
-                         std::size_t y,
-                         std::size_t x)
+unsigned selectDeltaMask(const std::uint8_t* p, std::size_t z, std::size_t y, std::size_t x)
 {
-    std::uint32_t h[8][256] = {};
-    std::uint64_t n = 0;
-    const std::size_t slice = y * x;
-    for (std::size_t zz = 1; zz < z; zz += 4) {
-        for (std::size_t yy = 1; yy < y; yy += 2) {
-            const std::uint8_t* p = q + zz * slice + yy * x;
-            const std::uint8_t* py = p - x;
-            const std::uint8_t* pz = p - slice;
-            const std::uint8_t* pyz = pz - x;
-            for (std::size_t xx = 1; xx < x; ++xx) {
-                const int v = p[xx];
-                const int vx = p[xx - 1], vy = py[xx], vz = pz[xx];
-                const int vxy = py[xx - 1], vxz = pz[xx - 1], vyz = pyz[xx];
-                const int vxyz = pyz[xx - 1];
-                h[0][v]++;
-                h[1][static_cast<std::uint8_t>(v - vx)]++;
-                h[2][static_cast<std::uint8_t>(v - vy)]++;
-                h[3][static_cast<std::uint8_t>(v - vx - vy + vxy)]++;
-                h[4][static_cast<std::uint8_t>(v - vz)]++;
-                h[5][static_cast<std::uint8_t>(v - vx - vz + vxz)]++;
-                h[6][static_cast<std::uint8_t>(v - vy - vz + vyz)]++;
-                h[7][static_cast<std::uint8_t>(v - vx - vy - vz + vxy +
-                                               vxz + vyz - vxyz)]++;
-                ++n;
-            }
-        }
-    }
-    unsigned best = kDeltaMaskZyx;
-    double bestBits = std::numeric_limits<double>::max();
-    for (unsigned m = 0; m < 8; ++m) {
-        double bits = 0;
-        for (int s = 0; s < 256; ++s)
-            if (h[m][s]) {
-                const double p = static_cast<double>(h[m][s]) / n;
-                bits -= p * std::log2(p);
-            }
-        if (bits < bestBits) {
-            bestBits = bits;
-            best = m;
-        }
-    }
-    return best;
+    return vc_delta_select_mask(p, z, y, x);
 }
-
-// Snap to the nearest multiple of `width` (bins centered on multiples, so 0
-// stays exactly 0 and masked background survives untouched). Idempotent:
-// bin centers map to themselves.
 template <typename T>
-void quantizeValues(T* data, std::size_t n, int width)
+void quantizeValues(T* p, std::size_t n, int width)
 {
-    constexpr int maxVal = std::numeric_limits<T>::max();
-    const int half = width / 2;
-    if constexpr (sizeof(T) == 1) {
-        T lut[256];
-        for (int v = 0; v < 256; ++v)
-            lut[v] = static_cast<T>(std::min((v + half) / width * width, maxVal));
-        for (std::size_t i = 0; i < n; ++i)
-            data[i] = lut[data[i]];
-    } else {
-        for (std::size_t i = 0; i < n; ++i)
-            data[i] = static_cast<T>(
-                std::min((data[i] + half) / width * width, maxVal));
-    }
+    if constexpr (sizeof(T) == 1) vc_delta_quantize_u8(p, n, width);
+    else vc_delta_quantize_u16(p, n, width);
 }
 
 // ---- order-0 rANS (ryg's rans64 construction): 12-bit frequency tables,
