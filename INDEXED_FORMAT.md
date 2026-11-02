@@ -1,7 +1,7 @@
 # NGC1 indexed channel/spatial container
 
 NGC1 implements the agreed NG/Delta tree container. It is **not** a D3D1
-extension, and contains no D3D1 children. Modern and legacy encoding paths
+extension, and contains no D3D1 children. Preset and legacy encoding paths
 are separate. All integers are fixed-width little-endian, with no alignment
 padding. The complete index is uncompressed and precedes all payloads.
 
@@ -33,7 +33,7 @@ No child pointers, node counts, parent IDs, or repeated leaf coordinates.
   must be multiples of32, and every cut must be strictly inside its parent.
 * Leaf record: **17 bytes** — codec/version tag(uint8), absolute object
   payload offset(uint64), payload length(uint64).
-  Tag16 is NCF1; tag17 is HGT3; tag18 is the documented rectangular NDB2
+  Tag16 is NCF1; tag17 is retired and rejected; tag18 is the documented rectangular NDB2
   mode504 grammar. Each leaf covers exactly one channel. Shape, location and
   channel identity are derived from the tree.
 
@@ -41,14 +41,14 @@ Payloads immediately follow the header, in leaf traversal order, without
 gaps or alignment padding. Offsets and lengths are validated against the full
 object length. The last payload must end exactly at the object end.
 Each leaf owns its complete prediction and entropy state; no sibling references.
-NCF1/HGT3 are unchanged native frames. Rectangular NDB2 stores its dimensions
+NCF1 are unchanged native frames. Rectangular NDB2 stores its dimensions
 only in the index, not an additional NDL1 wrapper.
 
 Overhead for L leaves is **24 + 17L + 5(L−1) = 22L + 19 bytes**:
 41 for1 leaf,63 for2,107 for4,195 for8,371 for16. For8 channels of128³ this
 is0.001162% of raw size. There is no reserved4KiB header slab. These are
 container/index bytes; the leaf's own model/entropy metadata remains necessary.
-Ordinary scalar cubic encoding emits NCF1/HGT3 directly, with **zero**
+Ordinary scalar cubic encoding emits NCF1 directly, with **zero**
 additional container overhead; `compressIndexed` explicitly requests an index.
 
 ## Shapes, encoding policy and validation
@@ -56,10 +56,10 @@ additional container overhead; `compressIndexed` explicitly requests an index.
 Logical dimensions can exceed a single leaf's limits. Rectangular leaves
 require32<=X<=1024, Y/Z>=32, all dimensions32-aligned, and Y*Z<=65536.
 The default encoder separates channels and partitions spatially into cubes
-that fit the existing five preset kernels. No adaptive partition optimization
+that fit the existing four preset kernels. No adaptive partition optimization
 is implied. Caller-provided preorder partitions allow different spatial trees
 per channel. Rectangular mode504 leaves are an **explicit** per-leaf option,
-not a silent replacement for fast/medium/slow/slower/tooslow.
+not a silent replacement for fast/medium/slow/slower.
 
 The decoder validates header lengths, integer products, geometry, split
 alignment, exact tree coverage, leaf codec IDs and payload ranges before
@@ -70,14 +70,14 @@ legacy Delta3D path for 16-bit data, quantized data, or positive dimensions not
 divisible by 32. This produces D3D1, never an NGC1 container with legacy leaves.
 Invalid types, shapes, sizes and quantization settings still raise errors.
 The explicit `compressIndexed` API does not fall back: incompatible geometry
-or partition requests are errors. Explicit `delta`/`lpc` behavior is unchanged.
+or partition requests are errors. Explicit `delta` behavior is unchanged.
 D3D1 version2 accepts only legacy D3D1 scalar children; mixed old/new containers
 and the discarded D3D1 version3 envelope are rejected.
 
 ## APIs and byte-range access
 
 Existing `compressChannels` / Python `Delta3D(channel_axis=...)` select NGC1
-for modern presets and the unchanged D3D1 container for Delta/LPC. Existing
+for presets and the unchanged D3D1 container for Delta. Existing
 `decompress`, `decompressInto`, `decodedSize`, and `channelCount` recognize NGC1.
 All format/shape/channel/partition information needed to decode is in the
 object; no per-chunk index information is added to Zarr metadata.

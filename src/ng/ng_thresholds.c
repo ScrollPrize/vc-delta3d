@@ -2,7 +2,6 @@
  * of the original threshold search. No approximate logarithms or reassociation. */
 #include "ng_thresholds.h"
 #include "residual_bridge.h"
-#include "volcodec_ng_lib.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

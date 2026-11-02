@@ -132,14 +132,7 @@ static inline void fixed_single(const uint8_t* __restrict src,uint8_t* __restric
     }
 }
 void vc_ng_fixed_candidates(const uint8_t* restrict src,uint8_t* const* buffers,unsigned d,unsigned mask){
-    if(ng_screen_work&&ng_screen_size==(size_t)d*d*d){
-        for(size_t i=0;i<ng_screen_size;i++)if(ng_screen_work[i]){
-            unsigned x=i%d,y=i/d%d,z=i/((size_t)d*d);
-            for(unsigned m=0;m<12;m++)if(mask&(1u<<m))
-                buffers[m][i]=pyramid((uint8_t)(src[i]-ng_directional_base(src,i,m,x,y,z,d)));
-        }
-        return;
-    }
+
     if(mask!=4095){
         // Fixed selections need only the requested predictor. Share the same
         // boundary/predictor definition rather than constructing other arrays.

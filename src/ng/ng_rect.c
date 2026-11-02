@@ -2,6 +2,7 @@
  * rANS stream and the original shared native wavefront residual payload. */
 #include "buffer.h"
 #include "ng_stream.h"
+#include "delta_filter.h"
 #include "residual_bridge.h"
 #include <math.h>
 #include <stdlib.h>
@@ -12,7 +13,6 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
 {
     if(!src||!dst||!written||!ng_geometry_valid(x,y,z))return -1;
     ng_geometry old=ng_current_geometry;ng_current_geometry=(ng_geometry){(int)x,(int)y,(int)z};
-    int soft=ng_soft_classes;ng_soft_classes=0;
     size_t n=NG_N,blocks=n/64,pn=0,en=0,sn=0;
     uint8_t params[65536],*symbols=malloc(n),*classes=malloc(n),*delta[8]={0};
     uint8_t *choices=calloc(blocks,1),*selector=NULL,*entropy=NULL;
@@ -29,7 +29,8 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
     for(unsigned m=1;m<8;++m){
         delta[m]=malloc(n);if(!delta[m])goto done;
         unsigned axis=m&(~m+1u),parent=m^axis;
-        memcpy(delta[m],parent?delta[parent]:src,n);delta_apply_mask(delta[m],axis);
+        memcpy(delta[m],parent?delta[parent]:src,n);
+        vc_delta_filter_u8(delta[m],z,y,x,axis);
     }
     for(unsigned m=1;m<8;++m)for(size_t i=0;i<n;++i){
         unsigned v=delta[m][i];delta[m][i]=(uint8_t)((v<<1)^(0u-(v>>7)));
@@ -66,7 +67,7 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
 done:
     free(symbols);free(classes);free(choices);free(base);free(scores);free(selector);free(entropy);free(frame.data);
     for(unsigned m=0;m<8;++m)free(delta[m]);
-    ng_current_geometry=old;ng_soft_classes=soft;return rc;
+    ng_current_geometry=old;return rc;
 }
 
 int vc_ng_rect_decode(const uint8_t *src,size_t n,unsigned x,unsigned y,unsigned z,

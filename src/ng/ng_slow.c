@@ -306,8 +306,8 @@ done:
 int vc_ng_slow_encode(const uint8_t *src,unsigned d,unsigned preset,uint8_t *out,size_t cap,size_t *written)
 {
     if(!src||!out||!written||preset>1||!ng_geometry_valid(d,d,d))return -1;
-    ng_geometry old=ng_current_geometry;unsigned old_edge=ng_choice_edge;int old_phase=ng_tap_fit_phase;
-    int old_context=ng_fit_context_mode;ng_fit_context_mode=0;ng_tap_fit_phase=1;ng_choice_edge=4;
+    ng_geometry old=ng_current_geometry;unsigned old_edge=ng_choice_edge;
+    int old_context=ng_fit_context_mode;ng_fit_context_mode=0;ng_choice_edge=4;
     ng_current_geometry=(ng_geometry){(int)d,(int)d,(int)d};
     search *s=calloc(1,sizeof(*s));vc_ng_occupancy zeros={0};plan plans[3];
     uint8_t *frame=NULL,*best=NULL;size_t size=0,best_size=0;int rc=-1;
@@ -324,7 +324,6 @@ int vc_ng_slow_encode(const uint8_t *src,unsigned d,unsigned preset,uint8_t *out
         unsigned k=plans[p].menu[j]-12;if(!seen[k]){order[count++]=k;seen[k]=1;}
     }
     if(d>32){
-        ng_tap_fit_phase=2;
         for(unsigned j=0;j<count;++j){
             unsigned k=order[j],pred=s->predictor[12+k];uint8_t *fixed[12]={0};
             if(k!=12){fixed[pred]=malloc((size_t)d*d*d);if(!fixed[pred])goto done;
@@ -347,5 +346,5 @@ done:
         for(unsigned k=0;k<CANDIDATES;++k){free(s->symbols[k]);free(s->classes[k]);}
         free(s->block);free(s->mask);free(s);}
     free(zeros.empty);free(zeros.mask);free(best);free(frame);
-    ng_current_geometry=old;ng_choice_edge=old_edge;ng_tap_fit_phase=old_phase;ng_fit_context_mode=old_context;return rc;
+    ng_current_geometry=old;ng_choice_edge=old_edge;ng_fit_context_mode=old_context;return rc;
 }

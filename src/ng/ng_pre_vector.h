@@ -5,7 +5,7 @@ NG_PATTR static void NG_PNAME(const uint8_t *row, const vcn_lc_plist *pl, uint16
 #endif
 ) {
 #ifndef NG_PFUSED
-  if(ng_dense_pre&1){ng_dense_pre_dispatch(row,pl,bias,pre,needed);return;}
+
 #endif
   const int n1 = pl->nlev[0], n2 = pl->nlev[1], n3 = pl->npair;
   for (int x = 0; x < VCN_LC_D; x += NG_PWIDTH) {

@@ -16,6 +16,28 @@
 
 ## Sequence
 
+### Cleanup and validation checkpoint (2026-11-02)
+
+- Removed unused tree routing, experimental entropy/fitting controls, tap-swap,
+  dense-tap experiments, standalone NG exports and obsolete residual adapters.
+  Rectangular leaves directly reuse the legacy C filter. No C++ implementation
+  or templates remain under `src/`. Native kernels now compile as C11.
+- Public/docs describe only fast/medium/slow/slower and legacy Delta. Historical
+  measurements remain explicitly labeled, not advertised as supported modes.
+- Rechecked all 576 frozen frames and 96 legacy/indexed configurations; exact
+  bytes and decoded hashes match. 121 Python cases and 18 C++ adapter cases pass.
+  The latter used Villa's existing doctest compatibility header (no install).
+- Standalone `cc` consumer passes, with ldd showing libc/libm/libzstd only.
+  Four ASan/UBSan regression suites pass, including malformed/truncated frames.
+  This host's unlimited stack causes ASan shadow mapping collisions; run the
+  sanitizer tests with `ulimit -s 32768` (a per-process limit, no system change).
+- Full original/port single-core 18-group timings are running via
+  `benchmark/compare_port.py`; do not substitute the six-chunk preliminary
+  numbers for the final result. Output:
+  `/data/hendrik/compression_experiments/villa4/encoder_speed/c_only_port_20261102`.
+- Linux x86-64 and forced AVX2 paths were exercised here. ARM/macOS/Windows
+  execution remains a CI validation limitation; their guarded kernels remain.
+
 ### Checkpoint: all retained encoders in C (2026-11-02)
 
 - Medium, slow, slower and rectangular NDB2 orchestration now execute in C.

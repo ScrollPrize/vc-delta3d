@@ -1,6 +1,5 @@
-/* volcodec_ng_lib.c: compiles volcodec_ng_lossless.h once and exports the C surface in
- * volcodec_ng_lib.h. MIT License, Copyright (c) 2026 Chase Hendrick (see LICENSE in this folder). */
-#include "volcodec_ng_lib.h"
+/* Shared native C entrypoints for the retained presets.
+ * MIT License, Copyright (c) 2026 Chase Hendrick; see LICENSE. */
 #include "residual_bridge.h"
 #include <limits.h>
 #include <string.h>
@@ -14,25 +13,9 @@ int ng_set_isa_limit(int bits){
     ng_disable_avx512=bits==256;return 0;
 }
 _Thread_local int ng_native_fast_control=0;
-_Thread_local int ng_dense_pre=0; /* 0 selected pairs; 1 fixed-layout SIMD; 2 all-tap pairs; 3 fixed scalar */
 _Thread_local int ng_fit_context_mode=0; /* scoped hybrid predictor experiment */
-_Thread_local int ng_entropy_rounds=0; /* encoder experiment, default unchanged */
-_Thread_local int ng_tap_swap_mode=0, ng_tap_fit_phase=0; /* bit1 screen, bit2 full */
-_Thread_local double ng_tap_swap_stats[8]={0}; /* fits,samples,ranked,scored,moves,bits before/after,screen fits */
-_Thread_local ng_tap_capture_fn ng_tap_capture=NULL;
-_Thread_local ng_tap_override_fn ng_tap_override=NULL;
 _Thread_local int ng_nonzero_sparse=1; /* preserve sparse budget over masked targets */
-_Thread_local double ng_fit_ridge_scale=1.;
 _Thread_local double ng_fit_intercept_weight=0.; /* relative to real sample mass */
-_Thread_local double ng_fit_zero_weight=0.; /* synthetic all-zero observation mass */
-_Thread_local double ng_entropy_stats[6]={0}; /* banks,samples,bits before/after,moves,trials */
-_Thread_local int ng_soft_classes=0; /* experiment wrapper: 0 hard, 1 blend, 2 half blend */
-_Thread_local unsigned ng_simple_activity_kind=0;
-_Thread_local const uint16_t* ng_simple_activity_values=NULL;
-/* Experimental bounded-history screen, never enabled by production encode. */
-_Thread_local const uint8_t* ng_screen_work=NULL;
-_Thread_local const uint8_t* ng_screen_targets=NULL;
-_Thread_local size_t ng_screen_size=0;
 
 int ng_geometry_valid(uint32_t x,uint32_t y,uint32_t z) {
     /* Bounds make padded pitches and signed SIMD offsets safe too. */
@@ -40,21 +23,10 @@ int ng_geometry_valid(uint32_t x,uint32_t y,uint32_t z) {
            (uint64_t)y*z<=65536 && x<=1024;
 }
 
-static _Thread_local void (*ng_profile_callback)(int);
-void ng_profile_tick(int k) {if(ng_profile_callback)ng_profile_callback(k);}
-#define VCN_LC_TICK(k) do { if(ng_profile_callback)ng_profile_callback(k); } while(0)
+#define VCN_LC_TICK(k) ((void)0)
 #include "volcodec_ng_lossless.h"
-/* Reuse the exact native solve/quantization with cached dense sufficient stats. */
-
-/* Diagnostic export exercises the actual fitting sampler, not a test copy. */
-
-/* Shared NG tap selection, solve and quantization for alternative traversal
- * orders. Inputs are centered, regularized covariance statistics. */
-
 #define NG_DECLARE_FIXED(d) \
 int ng_fixed##d##_encode_ex(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*); \
-int ng_fixed##d##_native_encode(const uint8_t*,uint8_t*,size_t,size_t*); \
-int ng_fixed##d##_native_decode(const uint8_t*,size_t,uint8_t*,size_t); \
 int ng_fixed##d##_activity_values(const uint8_t*,uint16_t*,int,uint32_t*); \
 int ng_fixed##d##_decode_core(const uint8_t*,size_t,uint8_t*,ng_symbol_reader,void*,const uint8_t*,int,int,const uint8_t*,const uint8_t*);
 NG_DECLARE_FIXED(32)
@@ -64,11 +36,9 @@ NG_DECLARE_FIXED(256)
 typedef struct {
     int (*encode)(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*);
     int (*decode)(const uint8_t*,size_t,uint8_t*,ng_symbol_reader,void*,const uint8_t*,int,int,const uint8_t*,const uint8_t*);
-    int (*native_encode)(const uint8_t*,uint8_t*,size_t,size_t*);
-    int (*native_decode)(const uint8_t*,size_t,uint8_t*,size_t);
     int (*activity_values)(const uint8_t*,uint16_t*,int,uint32_t*);
 } ng_fixed_kernels;
-#define NG_FIXED_ENTRY(d) {ng_fixed##d##_encode_ex,ng_fixed##d##_decode_core,ng_fixed##d##_native_encode,ng_fixed##d##_native_decode,ng_fixed##d##_activity_values}
+#define NG_FIXED_ENTRY(d) {ng_fixed##d##_encode_ex,ng_fixed##d##_decode_core,ng_fixed##d##_activity_values}
 static const ng_fixed_kernels ng_fixed_sets[]={NG_FIXED_ENTRY(64),NG_FIXED_ENTRY(128),NG_FIXED_ENTRY(256),NG_FIXED_ENTRY(32)};
 static const ng_fixed_kernels* ng_fixed_current(void) {
     if(ng_runtime_only || NG_X!=NG_Y || NG_X!=NG_Z)return NULL;
@@ -87,9 +57,6 @@ static vcn_status ng_decode_core(const uint8_t* p,size_t n,uint8_t* dst,ng_symbo
         : vcn_lc_decode_core(p,n,dst,reader,ctx,selectors,scalar,B,sy,contexts);
 }
 
-_Static_assert(VCN_REVISION == 2, "volcodec_ng_lib.h documents format revision 2");
-_Static_assert(VOLCODEC_NG_LIB_ERR_MODE == (int)VCN_ERR_MODE, "status codes match the header");
-_Static_assert(VOLCODEC_NG_LIB_ERR_VERSION == (int)VCN_ERR_VERSION, "status codes match the header");
 
 static int ng_config(const int* a,vcn_lc_cfg* cf) {
     if (!a || a[0]<1 || a[0]>3 || a[1]<-1 || a[1]>3 || a[2]<-1 || a[2]>3 ||
@@ -319,7 +286,7 @@ int ng_block_symbols(const uint8_t* p,size_t n,const uint8_t* s,const uint8_t* s
 #include "ng_causal_state.h"
 
 void ng_causal_destroy(void* ptr) {
-    ng_causal_state* s=ptr;if(!s)return;free(s->p);free(s->b);free(s->e);free(s->classes);free(s->pre);free(s->feature_activity);free(s);
+    ng_causal_state* s=ptr;if(!s)return;free(s->p);free(s->b);free(s->e);free(s->classes);free(s->pre);free(s);
 }
 static void* ng_causal_create_impl(const uint8_t* params,size_t n,int history) {
     ng_causal_state* s=calloc(1,sizeof(*s));if(!s)return NULL;
@@ -335,11 +302,8 @@ void* ng_causal_create(const uint8_t* p,size_t n){return ng_causal_create_impl(p
 void* ng_causal_create_model(const uint8_t* p,size_t n){return ng_causal_create_impl(p,n,0);}
 
 _Thread_local int ng_bank_scalar_control=14; /* cached shared-model SIMD; NWP1 uses integrated entropy */
-_Thread_local ng_prediction_reader ng_bank_prediction_reader=NULL;
-_Thread_local ng_prediction_transform ng_bank_prediction_transform=NULL;
 
 _Thread_local unsigned ng_bank_trial_flags=0;
-_Thread_local ng_route_context* ng_bank_routed=NULL;
 _Thread_local const uint8_t* ng_bank_external_payload=NULL;
 _Thread_local size_t ng_bank_external_payload_size=0;
 _Thread_local unsigned ng_bank_wave_model_count=12;
@@ -360,32 +324,14 @@ NG_BANK_DECLARE(256)
 
 int ng_bank_wave(void* const*s,unsigned mode,const int32_t*w,const uint8_t*c,uint8_t*out,const uint8_t*e,size_t n){
     unsigned saved_flags=ng_bank_trial_flags;
-    ng_bank_trial_flags=ng_bank_scalar_control==29?1:ng_bank_scalar_control==31?2:ng_bank_scalar_control==33?4:ng_bank_scalar_control==35?7:ng_bank_scalar_control==37?8:ng_bank_scalar_control==39?10:(ng_bank_scalar_control==41||ng_bank_scalar_control==14)?11:0;
-    if(ng_bank_scalar_control==47)ng_bank_trial_flags=11|64;
-    if(ng_bank_scalar_control==49)ng_bank_trial_flags=11|128;
-    if(ng_bank_scalar_control==51)ng_bank_trial_flags=11|256;
-    if(ng_bank_scalar_control==55)ng_bank_trial_flags=11|64|128;
-    if(ng_bank_scalar_control==57)ng_bank_trial_flags=11|64|128|256;
-    if(ng_bank_scalar_control==65)ng_bank_trial_flags=11|64|128|256|512;
-    if(ng_bank_scalar_control==69)ng_bank_trial_flags=11|64|128|256|512|2048;
-    if(ng_bank_scalar_control==14||ng_bank_scalar_control==109)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144;
-    if(ng_bank_scalar_control==111)ng_bank_trial_flags=11|64|128|256|512|2048|524288; /* scalar entropy regression */
-    if(ng_bank_scalar_control==153)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216;
-    if(ng_bank_scalar_control==155)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|2097152;
-    if(ng_bank_scalar_control==157)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|4194304;
-    /* Exact compact metadata + fused preparation; no format/model changes. */
-    if(ng_bank_scalar_control==14)ng_bank_trial_flags|=1048576|16777216|4194304|67108864|134217728|536870912|0x80000000u;
-    if(ng_bank_scalar_control==161)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|4194304|67108864;
-    if(ng_bank_scalar_control==163)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|4194304|67108864|134217728;
-    if(ng_bank_scalar_control==173)ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|4194304|67108864|134217728|0x80000000u;
-    if(ng_bank_scalar_control==167||ng_bank_scalar_control==177){
-        ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|262144|1048576|16777216|4194304|67108864|134217728|536870912;
-        if(ng_bank_scalar_control==177)ng_bank_trial_flags|=0x80000000u;
-    }
-    int saved=ng_bank_scalar_control;ng_bank_scalar_control=saved==25?24:saved==23?22:saved==19?18:saved==17?16:saved==15?14:saved==13?12:20;int rc;
+    /* Production integrated wavefront path: packed/fused metadata, cached
+     * history, and SIMD entropy. Experimental alternatives are not retained. */
+    ng_bank_trial_flags=11|64|128|256|512|2048|4096|8192|32768|65536|
+        262144|1048576|16777216|4194304|67108864|134217728|536870912|0x80000000u;
+    int saved=ng_bank_scalar_control;ng_bank_scalar_control=20;int rc;
     /* Preserve generic kernels when the NG+X shortcut cannot amortize its
      * dispatch/preparation overhead. Selection depends only on saved choices. */
-    if(saved==27||saved==14||ng_bank_trial_flags){
+    {
         size_t count=(size_t)(NG_X/ng_choice_edge)*(NG_Y/ng_choice_edge)*(NG_Z/ng_choice_edge),nx=0;
         for(size_t i=0;i<count;i++)nx+=c[i]==13;
         if(nx>=count/4)ng_bank_scalar_control=24;

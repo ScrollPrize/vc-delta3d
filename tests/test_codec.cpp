@@ -49,6 +49,25 @@ std::span<const std::byte> asSpan(const std::vector<std::byte>& v)
     return {v.data(), v.size()};
 }
 
+// Distinct channel fields in either supported memory layout.
+std::vector<std::byte> channelVolume(std::array<int, 3> shape, int channels,
+                                    std::size_t elemSize, bool last)
+{
+    const std::size_t n = static_cast<std::size_t>(shape[0]) * shape[1] * shape[2];
+    std::vector<std::byte> out(n * channels * elemSize);
+    for (int c = 0; c < channels; ++c) {
+        const auto field = smoothVolume(shape, elemSize);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t dst = last ? i * channels + c : c * n + i;
+            for (std::size_t b = 0; b < elemSize; ++b)
+                out[dst * elemSize + b] = static_cast<std::byte>(
+                    static_cast<unsigned>(field[i * elemSize + b]) +
+                    (b == 0 ? 17u * c : 0u));
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("D3D1 roundtrip uint8")

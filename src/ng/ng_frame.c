@@ -4,7 +4,6 @@
  * Fixed block edges 2,4,8,16,32 are supported. Experimental adaptive/tree frames
  * are deliberately not accepted by the reduced codec. */
 #include "residual_bridge.h"
-#include "volcodec_ng_lib.h"
 #include "rans.h"
 #include "ng_frame.h"
 #include "ng_stream.h"

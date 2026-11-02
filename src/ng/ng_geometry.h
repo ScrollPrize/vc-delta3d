@@ -29,28 +29,16 @@ extern "C" {
 extern thread_local NG_TLS_CONSTINIT ng_geometry ng_current_geometry;
 extern thread_local NG_TLS_CONSTINIT int ng_runtime_only;
 extern thread_local NG_TLS_CONSTINIT int ng_disable_avx512;
-extern thread_local NG_TLS_CONSTINIT int ng_soft_classes;
-extern thread_local NG_TLS_CONSTINIT int ng_dense_pre;
 extern thread_local NG_TLS_CONSTINIT int ng_fit_context_mode;
-extern thread_local NG_TLS_CONSTINIT int ng_entropy_rounds;
 extern thread_local NG_TLS_CONSTINIT int ng_nonzero_sparse;
-extern thread_local NG_TLS_CONSTINIT double ng_fit_ridge_scale;
 extern thread_local NG_TLS_CONSTINIT double ng_fit_intercept_weight;
-extern thread_local NG_TLS_CONSTINIT double ng_fit_zero_weight;
-extern thread_local NG_TLS_CONSTINIT double ng_entropy_stats[6];
 #else
 extern _Thread_local ng_geometry ng_current_geometry;
 extern _Thread_local int ng_runtime_only;
 extern _Thread_local int ng_disable_avx512;
-extern _Thread_local int ng_soft_classes;
-extern _Thread_local int ng_dense_pre;
 extern _Thread_local int ng_fit_context_mode;
-extern _Thread_local int ng_entropy_rounds;
 extern _Thread_local int ng_nonzero_sparse;
-extern _Thread_local double ng_fit_ridge_scale;
 extern _Thread_local double ng_fit_intercept_weight;
-extern _Thread_local double ng_fit_zero_weight;
-extern _Thread_local double ng_entropy_stats[6];
 #endif
 int ng_geometry_valid(uint32_t x,uint32_t y,uint32_t z);
 #ifdef __cplusplus

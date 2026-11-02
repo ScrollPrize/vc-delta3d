@@ -16,6 +16,14 @@ int main(void) {
         vc_frame_info info;assert(vc_frame_inspect(frame,bytes,&info));
         assert(info.decoded_bytes==count && info.channels==(channels?channels:1));
         assert(vc_decompress(frame,bytes,decoded,count));assert(!memcmp(src,decoded,count));
+        /* Exercise malformed/truncated input with the same public C path,
+         * including under ASan/UBSan. Never expose a partial success. */
+        assert(!vc_decompress(frame,bytes,decoded,count-1));
+        for(size_t cut=0;cut<32 && cut<bytes;++cut)
+            assert(!vc_decompress(frame,cut,decoded,count));
+        assert(!vc_decompress(frame,bytes-1,decoded,count));
+        uint8_t magic=frame[0];frame[0]^=0x80;
+        assert(!vc_decompress(frame,bytes,decoded,count));frame[0]=magic;
         if(channels) {
             vc_chunk_index index;
             uint32_t hn=vc_indexed_header_size(frame,8);assert(hn);

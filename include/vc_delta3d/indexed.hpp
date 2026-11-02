@@ -11,7 +11,7 @@ struct PartitionNode {
     SplitAxis axis=SplitAxis::Leaf;
     std::uint32_t cut=0;
     // Explicit opt-in to the documented rectangular mode504 baseline; this
-    // is NOT a silent substitution for one of the five cubic presets.
+    // is NOT a silent substitution for one of the four cubic presets.
     bool rectangularBaseline=false;
 };
 struct IndexedOptions {

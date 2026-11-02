@@ -67,7 +67,6 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
 {
     if (!src || !out || !written || !ng_geometry_valid(d,d,d)) return -1;
     const ng_geometry saved_geometry = ng_current_geometry;
-    const int saved_phase = ng_tap_fit_phase;
     const unsigned saved_edge = ng_choice_edge;
     const size_t full_n = (size_t)d * d * d;
     const unsigned sd = d > 32 ? 32 : d;
@@ -88,7 +87,6 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     int rc = -1, activity_ready = 0;
     ng_current_geometry = (ng_geometry){(int)d,(int)d,(int)d};
     ng_choice_edge = 4;
-    ng_tap_fit_phase = 1;
     if (!vc_ng_scan(&full,src,d)) goto done;
     selected = calloc(full.blocks,1);
     if (!selected) goto done;
@@ -157,7 +155,6 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     const int learned = chosen >= 12;
     if (d > 32) {
         ng_current_geometry = (ng_geometry){(int)d,(int)d,(int)d};
-        ng_tap_fit_phase = 2;
         for (unsigned m = 0; m < 12; ++m) {free(candidate[m]);candidate[m]=NULL;}
         unsigned fixed_mask = (1u<<predictor) | (full.count?1u:0u);
         for (unsigned m = 0; m < 12; ++m) if (fixed_mask & (1u<<m)) {
@@ -245,6 +242,6 @@ done:
     free(full.empty);free(full.mask);free(screen.empty);free(screen.mask);
     free(proxy);free(classes);free(symbols);free(activity);free(selected);
     free(active_symbols);free(active_activity);free(frame);
-    ng_current_geometry=saved_geometry;ng_tap_fit_phase=saved_phase;ng_choice_edge=saved_edge;
+    ng_current_geometry=saved_geometry;ng_choice_edge=saved_edge;
     return rc;
 }

@@ -19,21 +19,7 @@ static int ng_bank_symbols_core(unsigned count,const uint8_t* const* params,cons
         const unsigned edge=ng_choice_edge;
         const size_t choice_row=((z/edge)*(VCN_LC_Y/edge)+y/edge)*(VCN_LC_D/edge);
         for(unsigned x=0;x<VCN_LC_D;x+=edge)memset(row_choices+x,choices[choice_row+x/edge],edge);
-        if(ng_screen_work&&ng_screen_size==(size_t)VCN_LC_D*VCN_LC_Y*VCN_LC_Z){
-            /* Warm-up is a literal voxel halo. Unknown residuals
-               stay zero only OUTSIDE that union, not in source neighborhoods. */
-            for(int x=0;x<VCN_LC_D;x++){
-                if(!ng_screen_work[o+x]){symbols[o+x]=0;continue;}
-                unsigned selected=row_choices[x];
-                for(unsigned m=0;m<count;m++)if(p[m]&&candidates[12+m]&&(!ng_bank_selected_only||selected==12+m)){
-                    uint16_t q=(uint16_t)(base[m][o+x]+p[m]->cb[p[m]->lut[activity[o+x]]]);
-                    candidates[12+m][o+x]=ng_prediction_symbol(src[o+x],q);
-                }
-                if(selected>=12+count||!candidates[selected])goto done;
-                symbols[o+x]=candidates[selected][o+x];e[ri+x]=(symbols[o+x]+1u)>>1;
-            }
-            vcn_lc_row_end(e,z,y);continue;
-        }
+
         uint16_t bias[VCN_LC_D];uint8_t shared_class[VCN_LC_D];
         if(shared){memset(bias,0,sizeof(bias));VCN_LC_CLS(e,ri,p[0],bias,shared_class);}
         uint8_t needed[48]={0};

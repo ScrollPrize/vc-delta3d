@@ -1150,7 +1150,7 @@ static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t,
       unsigned w=external_weights?external_weights[j]:1;
       sum+=(int64_t)w*(target?target[j]:b[VCN_LC_IDX(z,y,x)]);count+=w;
     }
-    memset(wq,0,t->nt*sizeof(*wq));*bias=count?(int32_t)(uint16_t)(int32_t)floor(256.0*sum/(count*(1.+ng_fit_intercept_weight+ng_fit_zero_weight))+.5):0;free(selected_samples);return 1;
+    memset(wq,0,t->nt*sizeof(*wq));*bias=count?(int32_t)(uint16_t)(int32_t)floor(256.0*sum/(count*(1.+ng_fit_intercept_weight))+.5):0;free(selected_samples);return 1;
   }
   const int n = nt + 1;
   /* normal equations in exact integers: the samples' values as int16 columns (taps, the constant 1, the
@@ -1235,7 +1235,7 @@ static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t,
      * intercept diagonal. Eliminate that intercept analytically; keep the
      * normalization by real sample mass, so both formulations are identical. */
     double *C = (double *)malloc(sizeof(double) * nt * nt), cb[VCN_LC_MAXF], mf[VCN_LC_MAXF], cn = A[(size_t)nt*n+nt], tr = 0;
-    double intercept_ratio=1.+ng_fit_intercept_weight+ng_fit_zero_weight;
+    double intercept_ratio=1.+ng_fit_intercept_weight;
     double intercept_mass=cn*intercept_ratio, mt=bv[nt]/intercept_mass;
     for (int a = 0; a < nt; a++) mf[a] = A[(size_t)nt * n + a] / intercept_mass;
     for (int a = 0; a < nt; a++) {
@@ -1246,7 +1246,7 @@ static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t,
       }
       tr += C[a * nt + a];
     }
-    for (int a = 0; a < nt; a++) C[a * nt + a] += ng_fit_ridge_scale * (1e-6 * tr / nt + 1e-9);
+    for (int a = 0; a < nt; a++) C[a * nt + a] += (1e-6 * tr / nt + 1e-9);
     VCN_LC_TICK(22);
     if(!support)nt = vcn_lc_select(C,cb,mf,id,nt,nsel,tr);
     VCN_LC_TICK(23);
@@ -1298,26 +1298,6 @@ static void vcn_lc_mklut(vcn_lc_par *p) {
     p->lut[a] = (uint8_t)c;
   }
 }
-/* Interpolate existing Q8 class biases at class interval midpoints. Use doubled
- * activity coordinates to retain half-integer centers. Repeated thresholds
- * create empty bins, skipped here; entropy classes themselves remain hard. */
-static int32_t vcn_lc_soft_bias(const vcn_lc_par *p,unsigned activity) {
-  int left=-1,lc=0,last=-1;unsigned position=2*activity;
-  for(int k=0;k<p->K;k++){
-    unsigned lo=k?p->thr[k-1]+1:0,hi=k+1<p->K?p->thr[k]:VCN_LC_AMAX-1;
-    if(k==p->K-1&&k){unsigned width=k>1?p->thr[k-1]-p->thr[k-2]:p->thr[0]+1;hi=lo+(width?width:1)-1;}
-    if(hi<lo)continue;
-    int center=(int)(lo+hi);last=k;
-    if(position<=(unsigned)center){
-      if(left<0)return p->cb[k];
-      int64_t numerator=(int64_t)p->cb[left]*(center-position)+(int64_t)p->cb[k]*(position-lc);
-      int64_t den=center-lc;numerator+=den/2;
-      return (int32_t)(numerator>=0?numerator/den:-((-numerator+den-1)/den));
-    }
-    left=k;lc=center;
-  }
-  return last<0?0:p->cb[last];
-}
 /* one row's classes from the activity, and A[x] += the class bias: kc[x] = lut[activity], as uint8 */
 static void vcn_lc_cls_c(const uint8_t *e, size_t ri, const vcn_lc_par *p, uint16_t *restrict A, uint8_t *restrict kc) {
   _Alignas(32) uint16_t ap[VCN_LC_D];
@@ -1325,11 +1305,7 @@ static void vcn_lc_cls_c(const uint8_t *e, size_t ri, const vcn_lc_par *p, uint1
   for (int x = 0; x < VCN_LC_D; x++) {
     const int c = kc[x] = p->lut[ap[x]];
     int32_t bias=p->cb[c];
-    if(ng_soft_classes){
-      int32_t soft=vcn_lc_soft_bias(p,ap[x]);
-      if(ng_soft_classes==1)bias=soft;
-      else {int32_t sum=bias+soft;bias=sum>=0?(sum+1)/2:-((-sum)/2);}
-    }
+
     A[x] = (uint16_t)(A[x] + (uint16_t)bias);
   }
 }
@@ -1437,7 +1413,7 @@ __attribute__((target("avx2"))) static void vcn_lc_cls_avx2_pair(const uint8_t *
   if(pairbytes)vcn_lc_cls_avx2_impl(e,ri,p,A,kc,second,kc2,1,NULL);
   else vcn_lc_cls_avx2_impl(e,ri,p,A,kc,second,kc2,0,NULL);
 }
-#define VCN_LC_CLS(e, ri, p, A, kc) ((!ng_soft_classes && vcn_use_avx2() && (p)->K <= 16) ? vcn_lc_cls_avx2(e, ri, p, A, kc) : vcn_lc_cls_c(e, ri, p, A, kc))
+#define VCN_LC_CLS(e, ri, p, A, kc) ((vcn_use_avx2() && (p)->K <= 16) ? vcn_lc_cls_avx2(e, ri, p, A, kc) : vcn_lc_cls_c(e, ri, p, A, kc))
 #elif VCN_HAVE_NEON
 /* the same for K <= 16 with NEON: the activity in 16-bit lanes, the class as the count of thresholds below it
    (saturated bytes, 16 voxels at a time, when every threshold is below 255; else 16-bit compares), the bias
@@ -1478,7 +1454,7 @@ static void vcn_lc_cls_neon(const uint8_t *e, size_t ri, const vcn_lc_par *p, ui
     vst1q_u8(kc + x, c);
   }
 }
-#define VCN_LC_CLS(e, ri, p, A, kc) ((!ng_soft_classes && (p)->K <= 16) ? vcn_lc_cls_neon(e, ri, p, A, kc) : vcn_lc_cls_c(e, ri, p, A, kc))
+#define VCN_LC_CLS(e, ri, p, A, kc) (((p)->K <= 16) ? vcn_lc_cls_neon(e, ri, p, A, kc) : vcn_lc_cls_c(e, ri, p, A, kc))
 #else
 #define VCN_LC_CLS(e, ri, p, A, kc) vcn_lc_cls_c(e, ri, p, A, kc)
 #endif
@@ -1501,8 +1477,6 @@ static void vcn_lc_apre(const uint8_t*e,size_t ri,uint16_t*restrict a){
    w = d0 + 128 d1 + 16384 d2 (mod 2^16), pairs ordered by the digits they need */
 typedef struct {
   int np;
-  int dense_r[3];
-  uint16_t dense_w[VCN_LC_MAXT];
   ptrdiff_t o[VCN_LC_MAXT + 1];
   uint16_t w[VCN_LC_MAXT + 1];
   int npair, nlev[3];         /* pairs; of them nlev[0] need 1 digit, nlev[1] up to 2 */
@@ -1510,15 +1484,11 @@ typedef struct {
   int16_t pd[VCN_LC_MAXT / 2 + 1][3];
 } vcn_lc_plist;
 static void vcn_lc_mkplist(const vcn_lc_taps *t, const int32_t *w, vcn_lc_plist *pl) {
-  if(ng_dense_pre&1){
-    memcpy(pl->dense_r,t->r,sizeof(pl->dense_r));
-    for(int k=0;k<t->nt;k++)pl->dense_w[k]=(uint16_t)w[k];
-    return; /* no nonzero list, digit expansion, sorting, or pairing */
-  }
+
   int n = 0;
   int d[VCN_LC_MAXT + 1][3], lev[VCN_LC_MAXT + 1];
   for (int k = t->nrow; k < t->nt; k++)
-    if (w[k]||ng_dense_pre==2) pl->o[n] = t->off[k], pl->w[n] = (uint16_t)w[k], n++;
+    if (w[k]) pl->o[n] = t->off[k], pl->w[n] = (uint16_t)w[k], n++;
   pl->np = n;
   for (int k = 0; k < n; k++) {
     int x = (int16_t)pl->w[k];
@@ -1545,10 +1515,9 @@ static void vcn_lc_mkplist(const vcn_lc_taps *t, const int32_t *w, vcn_lc_plist 
     for (int l = 0; l < 3; l++) pl->pd[i][l] = (int16_t)(uint16_t)((uint8_t)d[a][l] | (unsigned)(uint8_t)d[c][l] << 8);
   }
 }
-#include "ng_dense_pre.h"
 /* pre[x] = bias + the previous-row taps, modulo 2^16 */
 static inline void vcn_lc_pre_span(const uint8_t *row,const vcn_lc_plist *pl,uint16_t bias,uint16_t *restrict pre,int count){
-  if(ng_dense_pre&1){ng_dense_pre_scalar(row,pl,bias,pre,count);return;}
+
   for(int x=0;x<count;x++)pre[x]=bias;
   for(int k=0;k<pl->np;k++){
     const uint8_t* restrict s=row+pl->o[k];uint16_t w=pl->w[k];
@@ -1606,7 +1575,7 @@ static void ng_pre_encode_multiply(const uint8_t*row,const vcn_lc_plist*pl,uint1
   }
 }
 static void ng_pre_encode(const uint8_t*row,const vcn_lc_plist*pl,uint16_t bias,uint16_t*pre){
-  if(ng_dense_pre&1){ng_dense_pre_dispatch(row,pl,bias,pre,~0u);return;}
+
   if(!ng_runtime_only&&ng_use_avx512()&&__builtin_cpu_supports("avx512bw")){
     ng_pre_encode_multiply(row,pl,bias,pre);return;
   }
@@ -1616,7 +1585,7 @@ static void ng_pre_encode(const uint8_t*row,const vcn_lc_plist*pl,uint16_t bias,
 #elif VCN_HAVE_NEON
 /* the same with 16-bit multiply-adds by the whole weight (modulo 2^16, as the C form), 32 voxels per step */
 static void vcn_lc_pre_neon_impl(const uint8_t *row, const vcn_lc_plist *pl, uint16_t bias, uint16_t *restrict pre,unsigned needed) {
-  if(ng_dense_pre&1){ng_dense_pre_dispatch(row,pl,bias,pre,needed);return;}
+
   for (int x = 0; x < VCN_LC_D; x += 32) {
     if(!(needed & (1u<<(x>>5)))) {memset(pre+x,0,32*sizeof(*pre));continue;}
     uint16x8_t a0 = vdupq_n_u16(bias), a1 = a0, a2 = a0, a3 = a0;
@@ -2043,23 +2012,9 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
         const size_t ri = VCN_LC_IDX(z, y, 0), o = ((size_t)z * VCN_LC_Y + y) * VCN_LC_D;
         uint8_t *restrict br = b + ri, *restrict er = e + ri;
         if(!cf->fit_session)memcpy(br, src + o, VCN_LC_D);
-        if(ng_screen_work&&ng_screen_size==NV){
-          /* Original source padding and taps; only residual history at the
-             outer boundary of the requested warm-up union is reset. */
-          memset(Pa+o,0,2*VCN_LC_D);vcn_lc_apre(e,ri,ap);
-          for(int x=0;x<VCN_LC_D;){
-            if(!ng_screen_work[o+x]){x++;continue;}
-            int begin=x;while(x<VCN_LC_D&&ng_screen_work[o+x])x++;
-            vcn_lc_pre_span(br+begin,&pl[s0],(uint16_t)p->bias[s0],pre+begin,x-begin);
-            if(cf->fit_feature)for(int j=begin;j<x;j++)pre[j]=(uint16_t)(pre[j]+(unsigned)(uint16_t)feature_weights[s0]*cf->fit_feature[o+j]);
-            vcn_lc_pass1_span(pre+begin,br+begin,w,Pa+o+begin,er+begin,x-begin);
-            for(int j=begin;j<x;j++)if(ng_screen_targets[o+j]){h[0][ap[j]]++;sa[0][ap[j]]+=(int16_t)(uint16_t)(br[j]*256u-Pa[o+j]);}
-          }
-          vcn_lc_row_end(b,z,y);vcn_lc_row_end(e,z,y);continue;
-        }
+
         VCN_LC_PRE(br, &pl[s0], (uint16_t)p->bias[s0], pre);
-        if(ng_simple_activity_values)memcpy(ap,ng_simple_activity_values+o,sizeof(ap));
-        else vcn_lc_apre(e, ri, ap);
+         vcn_lc_apre(e, ri, ap);
         uint16_t *restrict Q = Pa + o;
         // Add optional inputs before the native SIMD predictor/residual pass.
         // Only low16 bits survive; modular additions commute exactly. This
@@ -2087,7 +2042,7 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
      so the order of the sums does not matter) */
   {
     uint64_t acc = 0, calibration_count=NV;
-    if(ng_screen_targets&&ng_screen_size==NV){calibration_count=0;for(int a=0;a<VCN_LC_AMAX;a++)calibration_count+=h[0][a];}
+
     int k = 0;
     for (int v = 0; v < VCN_LC_AMAX && k < K - 1; v++) {
       acc += h[0][v];
@@ -2116,21 +2071,8 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
         uint8_t *restrict er = e + ri, *restrict cr = cls + (row_classes?0:o), *restrict sr = sym + o;
         const uint8_t *restrict vr = src + o;
         uint16_t *restrict Q = Pa + o; /* += the class bias */
-        if(ng_screen_work&&ng_screen_size==NV){
-          uint16_t a[VCN_LC_D];vcn_lc_apre(e,ri,a);
-          for(int x=0;x<VCN_LC_D;x++){
-            if(!ng_screen_work[o+x]){sr[x]=0;cr[x]=0;continue;}
-            cr[x]=p->lut[a[x]];Q[x]=(uint16_t)(Q[x]+p->cb[cr[x]]);
-            if(cf->export_prediction)cf->export_prediction[o+x]=Q[x];
-            if(cf->export_activity)cf->export_activity[o+x]=a[x];
-            sr[x]=ng_prediction_symbol(vr[x],Q[x]);er[x]=(sr[x]+1u)>>1;
-          }
-          vcn_lc_row_end(e,z,y);continue;
-        }
-        if(ng_simple_activity_values){
-          if(cf->export_activity)memcpy(cf->export_activity+o,ng_simple_activity_values+o,2*VCN_LC_D);
-          for(int x=0;x<VCN_LC_D;x++){cr[x]=p->lut[ng_simple_activity_values[o+x]];Q[x]=(uint16_t)(Q[x]+p->cb[cr[x]]);}
-        }else if(cf->export_activity && !ng_soft_classes){
+
+         if(cf->export_activity){
 #if VCN_HAVE_AVX2
           if(vcn_use_avx2() && p->K<=16)ng_cls_export_avx2(e,ri,p,Q,cr,cf->export_activity+o);
           else
