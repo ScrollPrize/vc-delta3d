@@ -14,6 +14,9 @@ int vc_ng_frame_encode(unsigned dimension,unsigned edge,unsigned mode,
     const uint8_t *selectors,const uint8_t *symbols,const uint16_t *thresholds,
     unsigned classes,const uint8_t *class_ids,uint8_t **out,size_t *size);
 int vc_ng_preset_decode(const uint8_t*,size_t,uint8_t*,size_t);
+/* Append the ordinary zero predictor for predetermined empty blocks. */
+int vc_ng_frame_encode_zeros(unsigned,const vc_ng_model*,unsigned,const vc_ng_choice*,unsigned,
+    const uint8_t*,const uint8_t*,const uint16_t*,const uint8_t*,const uint8_t*,uint8_t**,size_t*);
 unsigned vc_ng_frame_dimension(const uint8_t*,size_t);
 #ifdef __cplusplus
 }

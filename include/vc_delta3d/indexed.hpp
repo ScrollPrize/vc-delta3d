@@ -49,3 +49,6 @@ bool decodeIndexedLeaf(std::span<const std::byte> payload,const IndexedLeaf& lea
     std::span<std::byte> output);
 bool decompressIndexedInto(std::span<const std::byte> input,std::span<std::byte> output);
 } // namespace vc_delta3d
+
+// Header-only ownership adapter; codec implementation and library are pure C.
+#include <vc_delta3d/detail/indexed_adapter.hpp>

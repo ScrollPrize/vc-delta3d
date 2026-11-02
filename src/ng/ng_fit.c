@@ -21,18 +21,22 @@ int vc_ng_fit_input(vc_ng_fit *fit, const uint8_t *src, const int *cfg,
     memset(fit, 0, sizeof(*fit));
     fit->params = malloc(65536);
     fit->symbols = malloc(n);
-    feature = malloc(n);
+    feature = fixed ? malloc(n) : NULL;
     if (!activity) {
         classes = malloc(n);
         fit->base = malloc(n * sizeof(*fit->base));
     }
-    if (!fit->params || !fit->symbols || !feature ||
+    if (!fit->params || !fit->symbols || (fixed && !feature) ||
         (!activity && (!classes || !fit->base))) goto done;
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; fixed && i < n; ++i) {
         uint8_t delta = (uint8_t)((fixed[i] >> 1) ^ (0u - (fixed[i] & 1u)));
         feature[i] = (uint8_t)(src[i] - delta);
     }
-    if (session) {
+    if (!fixed) {
+        if (session || activity) goto done;
+        rc = ng_plain_prepare_masked(src,cfg,mask,fit->params,65536,&fit->param_size,
+                                     fit->symbols,classes,fit->base);
+    } else if (session) {
         if (mask || activity) goto done;
         rc = ng_feature_prepare_cached(session, src, cfg, feature, fit->weights,
             fit->params, 65536, &fit->param_size, fit->symbols, classes, fit->base);

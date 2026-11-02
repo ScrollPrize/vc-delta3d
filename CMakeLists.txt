@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(vc_delta3d VERSION 0.3.0 LANGUAGES C CXX)
+project(vc_delta3d VERSION 0.3.0 LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -8,8 +8,12 @@ include(CMakePackageConfigHelpers)
 option(VC_DELTA3D_BUILD_PYTHON "Build the Python extension" OFF)
 option(VC_DELTA3D_BUILD_TESTS "Build the C++ codec tests" ${PROJECT_IS_TOP_LEVEL})
 option(VC_DELTA3D_INSTALL_CPP "Install the C++ library and CMake package" ON)
+option(VC_DELTA3D_MODERN_SMOKE "Build no-dependency integration smoke test" OFF)
+if(VC_DELTA3D_BUILD_PYTHON OR VC_DELTA3D_BUILD_TESTS OR VC_DELTA3D_MODERN_SMOKE)
+    enable_language(CXX)
+endif()
 
-add_library(vc_delta3d STATIC src/codec.cpp)
+add_library(vc_delta3d STATIC)
 option(VC_DELTA3D_BUILD_NG "Build modern NG/Delta presets" ON)
 if(VC_DELTA3D_BUILD_NG)
     include(cmake/modern.cmake)
@@ -48,13 +52,16 @@ set_target_properties(vc_delta3d PROPERTIES
     EXPORT_NAME vc_delta3d
     POSITION_INDEPENDENT_CODE ON
 )
-target_compile_features(vc_delta3d PUBLIC cxx_std_20)
-# The LPC fit solves its normal equations in double precision; no fused
+target_compile_features(vc_delta3d PUBLIC c_std_11)
+if(CMAKE_CXX_COMPILER_LOADED)
+    target_compile_features(vc_delta3d INTERFACE cxx_std_20)
+endif()
+# The NG fit solves its normal equations in double precision; no fused
 # multiply-adds keeps the fitted weights, and so the payload bytes, identical
 # across platforms (GCC contracts by default on aarch64).
-if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(vc_delta3d PRIVATE /clang:-ffp-contract=off)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vc_delta3d PRIVATE -ffp-contract=off)
 endif()
 target_include_directories(vc_delta3d

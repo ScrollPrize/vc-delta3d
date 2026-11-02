@@ -5,30 +5,13 @@
 #include "ng_frame.h"
 #include "ng_predict.h"
 #include "ng_screen.h"
+#include "ng_search.h"
 #include "ng_thresholds.h"
 #include "residual_bridge.h"
 #include <stdlib.h>
 #include <string.h>
 #include <zstd.h>
 
-typedef struct {
-    uint8_t *empty, *mask;
-    size_t count, blocks;
-} occupancy;
-
-static int scan(occupancy *o, const uint8_t *src, unsigned d)
-{
-    o->blocks = (size_t)(d / 4) * (d / 4) * (d / 4);
-    o->empty = malloc(o->blocks);
-    if (!o->empty) return 0;
-    o->count = vc_ng_zero_scan(src, d, 4, o->empty);
-    if (o->count) {
-        o->mask = malloc((size_t)d * d * d);
-        if (!o->mask) return 0;
-        vc_ng_zero_mask(d, 4, o->empty, o->mask);
-    }
-    return 1;
-}
 
 static int statistics(const uint8_t *symbols, const uint8_t *mask, size_t n,
                       uint16_t *activity, uint8_t *classes, uint16_t thresholds[15],
@@ -90,7 +73,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     const unsigned sd = d > 32 ? 32 : d;
     const size_t n = (size_t)sd * sd * sd;
     const unsigned scale = (unsigned)(full_n / n);
-    occupancy full = {0}, screen = {0};
+    vc_ng_occupancy full = {0}, screen = {0};
     vc_ng_fit fits[2] = {{0}}, final_fit = {0};
     uint8_t *proxy = NULL, *candidate[12] = {0}, *classes = NULL, *symbols = NULL;
     uint8_t *selected = NULL, *active_symbols = NULL, *frame = NULL;
@@ -106,7 +89,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     ng_current_geometry = (ng_geometry){(int)d,(int)d,(int)d};
     ng_choice_edge = 4;
     ng_tap_fit_phase = 1;
-    if (!scan(&full,src,d)) goto done;
+    if (!vc_ng_scan(&full,src,d)) goto done;
     selected = calloc(full.blocks,1);
     if (!selected) goto done;
     if (full.count == full.blocks) {
@@ -122,7 +105,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
         sample = proxy;
     }
     ng_current_geometry = (ng_geometry){(int)sd,(int)sd,(int)sd};
-    if (full.count && !scan(&screen,sample,sd)) goto done;
+    if (full.count && !vc_ng_scan(&screen,sample,sd)) goto done;
     classes = malloc(full_n);
     activity = malloc(full_n * sizeof(*activity));
     if (!classes || !activity) goto done;

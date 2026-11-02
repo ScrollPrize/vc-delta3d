@@ -183,3 +183,6 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
                              const WireMagic& expectedMagic);
 
 } // namespace vc_delta3d
+
+// Header-only ownership adapter; codec implementation and library are pure C.
+#include <vc_delta3d/detail/codec_adapter.hpp>

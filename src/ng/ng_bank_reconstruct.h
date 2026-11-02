@@ -17,7 +17,7 @@ extern _Thread_local ng_prediction_transform ng_bank_prediction_transform;
 static int ng_bank_reconstruct_scalar_core(void* const* states,unsigned mode,const int32_t* weights,const uint8_t* choices,uint8_t* out,unsigned count,
     ng_symbol_reader reader,void* context,const vcn_lc_par* activity_params,uint8_t* activity_errors,uint8_t* raw){
     if(count<12||count>48||count%12)return -1;
-    const int control=ng_bank_scalar_control,detail=ng_bank_detail_enabled;
+    const int control=ng_bank_scalar_control;
     const ng_prediction_reader prediction_reader=ng_bank_prediction_reader;
     const ng_prediction_transform prediction_transform=ng_bank_prediction_transform;
     ng_causal_state* model[48];ng_causal_state* history=NULL;
@@ -45,7 +45,6 @@ static int ng_bank_reconstruct_scalar_core(void* const* states,unsigned mode,con
                 VCN_LC_CLS(history->e,ri,s->p,s->pre,s->classes);
             }
         }
-        if(detail)ng_bank_detail_mark(2);
         for(int bx=0;bx<nb;bx++){
             unsigned choice=row[bx];if(choice>=12+count)return -1;
             if(choice==0&&!history&&!reader)continue; /* decoded direct bytes are final */
@@ -95,7 +94,6 @@ static int ng_bank_reconstruct_scalar_core(void* const* states,unsigned mode,con
         }
         if(history){vcn_lc_row_end(history->b,z,y);vcn_lc_row_end(history->e,z,y);}
         if(reader)vcn_lc_row_end(activity_errors,z,y);
-        if(detail)ng_bank_detail_mark(3);
     }
     return 0;
 }
@@ -415,7 +413,7 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
     ng_route_context* routed=ng_bank_routed;
     const unsigned count=ng_bank_wave_model_count;
     if(count<12||count>48||count%12)return -1;
-    int control=ng_bank_scalar_control;const int detail=ng_bank_detail_enabled;
+    int control=ng_bank_scalar_control;
     unsigned trial=ng_bank_trial_flags;
     int compact=control>=10,vectorprep=control>=9;
     int full=entropy||(control>=7&&control<=14);
@@ -654,7 +652,6 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                 vcn_lc_row_end(h->e,z,y);
             }
         }
-        if(detail)ng_bank_detail_mark(4);
         if(routed&&routed->bulk){
             ng_route_wave_data data={0};data.width=VCN_LC_D;data.lanes=nl;data.offsets=offset;data.ys=ys;data.zs=zs;
             data.activity=activity;data.class_lut=ep->lut;data.errors=h->e;data.error_offsets=ri;data.raw=routed->raw;
@@ -674,7 +671,6 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                 }else for(int x=0;x<VCN_LC_D;x++){unsigned s=entropy_symbols[j][x];out[offset[j]+x]=(uint8_t)((s>>1)^-(s&1));h->e[ri[j]+x]=(uint8_t)((s+1)>>1);}
                 vcn_lc_row_end(h->e,zs[j],ys[j]);
             }
-            if(detail)ng_bank_detail_mark(0);
         }
         if(delta_only)continue;
         if(full){
@@ -778,7 +774,6 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                 for(int j=0;j<nl;j++)for(int x=0;x<VCN_LC_D;x++)transposed[x][j]=fields[f][j][x];
                 for(int x=0;x<VCN_LC_D;x++)memcpy(compact?(uint8_t*)(compactcols+x)+compact_offsets[f]:(uint8_t*)(fullcols+x)+offsets[f],transposed[x],64);
             }
-            if(detail)ng_bank_detail_mark(5);
             if(routed&&routed->wave){
                 uint16_t block_weights[VCN_LC_D/2][4][32];memset(block_weights,0,((VCN_LC_D>>edge_shift))*sizeof(block_weights[0]));
                 if(compact)for(int bx=0;bx<(VCN_LC_D>>edge_shift);bx++)for(int j=0;j<nl;j++){
@@ -793,7 +788,6 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                 if(status==2)continue; /* Deferred independent group, owns metadata. */
                 if(status)goto done;
                 ng_bank_publish_wave(&data);
-                if(detail)ng_bank_detail_mark(3);
                 continue;
             }else if(compact){
 #if VCN_HAVE_AVX2
@@ -826,7 +820,6 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
             ng_route_wave_data published={0};published.width=VCN_LC_D;published.lanes=nl;published.values=fullvalues[0];published.offsets=offset;published.ys=ys;published.zs=zs;published.error_offsets=ri;
             published.history=wave_history;published.history_plane=history_plane;published.history_stride=history_stride;published.history_depth=history_depth;published.delta=dl;published.publish_state=h;published.output=out;
             ng_bank_publish_wave(&published);
-            if(detail)ng_bank_detail_mark(3);
             continue;
         }
         /* Prepare and consume one block across the independent rows. The

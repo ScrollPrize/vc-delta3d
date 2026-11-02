@@ -1130,11 +1130,8 @@ static inline int ng_fit_input_value(const uint8_t*b,size_t i,const vcn_lc_taps*
   return id<t->nt?(int)b[i+t->off[id]]-(kind==3?(int)activity:0)
     :kind==2&&id<2*t->nt?(int)((b[i+t->off[id-t->nt]]*activity+127)/255):(int)activity;
 }
-#include "ng_tap_swap.h"
 static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t, int zlo, int zhi, int stride, int slice_only, int nsel, int32_t *wq, int32_t *bias, const int16_t *target, const uint8_t *feature, int feature_kind, int weighting, const uint8_t *sample_mask,ng_fit_session*session,const uint8_t *external_weights,const int32_t*support) {
   VCN_LC_TICK(20);
-  if(ng_tap_fit_phase==2&&ng_tap_override&&ng_tap_override(slice_only,wq,bias))return 1;
-  const uint8_t* eligible_samples=sample_mask;
   uint64_t sample_counts[3];
   uint8_t* selected_samples=ng_nonzero_sparse?ng_fit_nonzero_sample_mask(sample_mask,
       VCN_LC_D,VCN_LC_Y,VCN_LC_Z,VCN_LC_XP,zlo,zhi,stride,
@@ -1145,9 +1142,6 @@ static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t,
     if ((!slice_only || t->dz[k] == 0)&&(!support||support[k])) id[nt++] = k;
   if(feature_kind==2)for(int k=0;k<t->nt;k++)if(!slice_only||t->dz[k]==0)id[nt++]=t->nt+k;
   if(feature_kind==1||feature_kind==2)id[nt++]=feature_kind==2?2*t->nt:t->nt;
-  /* Screen-support replay must not exceed the original tap budget if the
-   * scalar feature was absent from the screen's quantized support. */
-  if(support&&(ng_tap_swap_mode&8)&&feature_kind==1&&nt>nsel)nt--;
   if(feature_kind==4||feature_kind==5)for(int k=0;k<8+(feature_kind==5);k++)id[nt++]=t->nt+k;
   if(!nt){
     int64_t sum=0,count=0;
@@ -1254,9 +1248,7 @@ static int vcn_lc_fit_features_supported(const uint8_t *b, const vcn_lc_taps *t,
     }
     for (int a = 0; a < nt; a++) C[a * nt + a] += ng_fit_ridge_scale * (1e-6 * tr / nt + 1e-9);
     VCN_LC_TICK(22);
-    if(ng_tap_fit_phase==2&&ng_tap_capture)ng_tap_capture(slice_only,0,C,cb,mf,id,nt,mt);
-    if(!support)nt = ng_tap_select(C,cb,mf,id,nt,nsel,tr,b,t,zlo,zhi,stride,sample_mask,eligible_samples,session,mt,target,feature,feature_kind);
-    if(ng_tap_fit_phase==2&&ng_tap_capture)ng_tap_capture(slice_only,1,C,cb,mf,id,nt,mt);
+    if(!support)nt = vcn_lc_select(C,cb,mf,id,nt,nsel,tr);
     VCN_LC_TICK(23);
     double *C0 = (double *)malloc(sizeof(double) * nt * nt);
     if (C0) memcpy(C0, C, sizeof(double) * nt * nt);
@@ -1867,7 +1859,6 @@ typedef struct {
   int32_t *context_weights; /* optional experimental 2x8 nonlinear fit outputs */
   int embed_context; /* serialize derived coefficients as model version4 */
 } vcn_lc_cfg;
-#include "ng_entropy_fit.h"
 typedef struct { uint32_t xmax, rcp, bias; uint16_t cmpl, shift; } vcn_lc_esym;
 static inline void vcn_lc_init_esym(vcn_lc_esym*E,uint32_t f,uint32_t cum,uint32_t M,int tb){
   E->xmax=((VCN_LC_RL>>tb)<<16)*f;E->cmpl=(uint16_t)(M-f);
@@ -1925,7 +1916,6 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
                                   uint8_t *export_sym, uint8_t *export_cls) {
   const size_t NV = (size_t)VCN_LC_D * VCN_LC_Y * VCN_LC_Z;
   int32_t feature_weights[2]={0,0};
-  int entropy_round=0;
   const int K = cf->K, tb = cf->tb;
   const uint32_t M = 1u << tb;
   vcn_lc_par *p = (vcn_lc_par *)calloc(1, sizeof(vcn_lc_par));
@@ -2034,7 +2024,6 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
       }
     }
   }
-rebuild_entropy_predictions:
   memset(h,0,sizeof(*h));memset(sa,0,sizeof(*sa));
   if(cnt)memset(cnt,0,(size_t)K*sizeof(*cnt));
   if(cf->export_feature_weights)for(int bank=0;bank<2;bank++)cf->export_feature_weights[bank]=feature_weights[bank];
@@ -2113,11 +2102,6 @@ rebuild_entropy_predictions:
       m = m < -32768 ? -32768 : m > 32767 ? 32767 : m;
       p->cb[c] = cf->single_model?0:(int32_t)m;
     }
-  }
-  if(entropy_round<ng_entropy_rounds&&!cf->context_weights&&!cf->fixed_fit&&!cf->zero_correction&&!cf->single_model&&
-      !cf->fit_target&&!cf->fit_weights&&(!cf->fit_feature||cf->feature_mode==1)){
-    entropy_round++;
-    if(ng_entropy_refine(p,cf,b,e,Pa,feature_weights))goto rebuild_entropy_predictions;
   }
   VCN_LC_TICK(11);
   /* symbols, in raster order: the class from the activity of the biased residual magnitudes of earlier

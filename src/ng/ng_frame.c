@@ -7,9 +7,28 @@
 #include "volcodec_ng_lib.h"
 #include "rans.h"
 #include "ng_frame.h"
+#include "ng_stream.h"
 #include <zstd.h>
 #include <stdlib.h>
 #include <string.h>
+
+int vc_ng_frame_encode_zeros(unsigned d,const vc_ng_model *models,unsigned nm,
+    const vc_ng_choice *menu,unsigned nc,const uint8_t *selectors,const uint8_t *symbols,
+    const uint16_t *thresholds,const uint8_t *classes,const uint8_t *empty,uint8_t **out,size_t *size)
+{
+    if(!empty)return vc_ng_frame_encode(d,4,1,models,nm,menu,nc,selectors,symbols,thresholds,16,classes,out,size);
+    if(!nc||nc>=60)return 0;
+    vc_ng_choice extended[60];memcpy(extended,menu,nc*sizeof(*menu));
+    unsigned bank=0;
+    for(unsigned i=0;i<nc;++i)if(bank<=menu[i].entropy)bank=menu[i].entropy+1;
+    if(bank>=4)return 0;
+    extended[nc]=(vc_ng_choice){12,255,bank,{0,0}};
+    size_t count=(size_t)(d/4)*(d/4)*(d/4);
+    uint8_t *selected=malloc(count);if(!selected)return 0;
+    for(size_t i=0;i<count;++i)selected[i]=empty[i]?(uint8_t)nc:selectors[i];
+    int ok=vc_ng_frame_encode(d,4,1,models,nm,extended,nc+1,selected,symbols,thresholds,16,classes,out,size);
+    free(selected);return ok;
+}
 
 int vc_ng_frame_encode(unsigned d,unsigned edge,unsigned mode,const vc_ng_model *models,unsigned nm,
     const vc_ng_choice *menu,unsigned nc,const uint8_t *selectors,const uint8_t *symbols,
@@ -119,14 +138,6 @@ unsigned vc_ng_frame_dimension(const uint8_t *src,size_t size) {
     return ng_geometry_valid(d,d,d)?d:0;
 }
 typedef struct { unsigned predictor,model,entropy; int32_t weight[2]; } choice;
-static int decode_ids(const uint8_t *src,size_t bytes,uint8_t *out,size_t count) {
-    uint16_t freq[256]; size_t used=0;
-    if(ng_read_freq_table(src,bytes,freq,&used) || used>bytes || bytes-used>SIZE_MAX-512) return 0;
-    size_t size=512+bytes-used; uint8_t *raw=malloc(size); if(!raw) return 0;
-    for(unsigned i=0;i<256;++i) { raw[2*i]=(uint8_t)freq[i];raw[2*i+1]=(uint8_t)(freq[i]>>8); }
-    memcpy(raw+512,src+used,bytes-used);
-    int ok=vc_rans_decode(raw,size,out,count);free(raw);return ok;
-}
 int vc_ng_preset_decode(const uint8_t *src,size_t size,uint8_t *out,size_t cap) {
     size_t hn=0,zn=0; uint8_t *h=NULL,*selectors=NULL,*canonical=NULL,*banks=NULL;
     void *states[4]={0}; int result=-1;
@@ -160,7 +171,7 @@ int vc_ng_preset_decode(const uint8_t *src,size_t size,uint8_t *out,size_t cap) 
             selectors[i]|=((packed[(i*bits+b)/8]>>((i*bits+b)%8))&1u)<<b;
     } else if(singleton==255) {
         size_t bytes=number(&r,4);const uint8_t *packed=take(&r,bytes);
-        if(!r.ok || !decode_ids(packed,bytes,selectors,count)) goto done;
+        if(!r.ok || !vc_ng_stream_decode(packed,bytes,selectors,count)) goto done;
     } else {
         if(singleton>=nc) goto done;
         memset(selectors,singleton,count);

@@ -16,6 +16,21 @@
 
 ## Sequence
 
+### Checkpoint: all retained encoders in C (2026-11-02)
+
+- Medium, slow, slower and rectangular NDB2 orchestration now execute in C.
+  The static library links with the C compiler; C++ ownership adapters are
+  header-only and Python calls through those thin adapters into the C API.
+- Removed the obsolete C++ encoder/search implementation, unused experiment
+  entrypoints, sparse-bank/context/coarse prototypes and tap-swap/entropy-fit
+  experiments. Preserved the production fixed-geometry SIMD instantiations.
+- All 576 frozen frames still decode and re-encode byte-identically after the
+  C-only transition; all 96 legacy/indexed compatibility cases also passed.
+  Four native regression executables pass after pruning unused entrypoints.
+- Remaining: finish internal experimental-control cleanup, final Python and
+  sanitizer/portability checks, performance measurements and public docs.
+  Earlier checkpoints below describe historical intermediate states.
+
 ### Checkpoint: native C frames and Fast (2026-11-02)
 
 - NCF1 writer/decoder, threshold DP/coordinate search, occupancy/screening and
