@@ -9,6 +9,9 @@ The codec, fitting, SIMD kernels, entropy coding, framing and indexed containers
 are C. The C++ headers are ownership/error adapters over the C API. Python uses
 a thin nanobind adapter; it does not perform prediction or compression in Python.
 
+[C-port validation and measurements](C_PORT_RESULTS.md) includes the complete
+18-group before/after tables, compatibility checks and reproduction commands.
+
 ## Formats and compatibility
 
 - Lossless uint8 chunks with dimensions divisible by 32 use the preset encoder.

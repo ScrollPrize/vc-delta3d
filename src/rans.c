@@ -26,6 +26,17 @@ typedef struct RansEncSym {
     uint32_t shift;
 } RansEncSym;
 
+/* Native-endian, unaligned store matching the existing wire format. Explicit
+ * byte accesses compile to one word store without FORTIFY's dynamic-size
+ * memcpy check on every backwards-growing stream write. The encoder reserves
+ * the complete worst-case stream plus speculative-store slack before use. */
+static inline void ransStore32(uint8_t *p, uint32_t value)
+{
+    const uint8_t *bytes = (const uint8_t *)&value;
+    p[0] = bytes[0]; p[1] = bytes[1];
+    p[2] = bytes[2]; p[3] = bytes[3];
+}
+
 static inline uint64_t ransMulHi(uint64_t a, uint64_t b)
 {
 #if defined(_MSC_VER)
@@ -170,7 +181,7 @@ int vc_rans_encode(const uint8_t *in, size_t n, size_t headerReserve,
         const RansEncSym *ep = &enc[in[j]];
         uint64_t s = x[j & (kRansLanes - 1)];
         const uint32_t w = (uint32_t)(s);
-        memcpy(p - 4, &w, 4);
+        ransStore32(p - 4, w);
         const bool renorm = s >= ep->xmax;
         p -= renorm ? 4 : 0;
         s = renorm ? s >> 32 : s;
@@ -184,11 +195,19 @@ int vc_rans_encode(const uint8_t *in, size_t n, size_t headerReserve,
         j -= kRansLanes;
         const uint8_t* sym = in + j;
         size_t o = 0;
+        /* Keep the eight independent states in registers. GCC's C frontend
+         * otherwise leaves this tiny loop rolled (unlike the original C++
+         * kernel), serializing state loads and reciprocal multiplies. */
+#if defined(__clang__)
+#pragma clang loop unroll(full)
+#elif defined(__GNUC__)
+#pragma GCC unroll 8
+#endif
         for (size_t k = kRansLanes; k-- > 0;) {
             const RansEncSym *ep = &enc[sym[k]];
             uint64_t s = x[k];
             const uint32_t w = (uint32_t)(s);
-            memcpy(p - o - 4, &w, 4);
+            ransStore32(p - o - 4, w);
             const bool renorm = s >= ep->xmax;
             o += renorm ? 4 : 0;
             s = renorm ? s >> 32 : s;

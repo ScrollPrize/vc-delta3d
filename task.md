@@ -16,6 +16,26 @@
 
 ## Sequence
 
+### Completed acceptance (2026-11-02)
+
+- All retained implementation is C11; only public C++/Python adapters use C++.
+  Original feature branch is unchanged. The earlier unfinished milestones below
+  are historical, not the current state.
+- Passed 576 exact-frame checks on native and AVX2-only paths, 384 historical
+  variable-block frames, 96 legacy/indexed parity cases, 124 Python tests,
+  18 C++ adapter cases and four C suites (also ASan/UBSan).
+- Full 18-group, three-repetition single-core measurements: combined encode
+  MiB/s original → C is fast 65.4 → 113.3, medium 13.5 → 20.6,
+  slow 4.4 → 7.2, slower 4.1 → 6.3. Combined decode is
+  597.8 → 631.4, 458.9 → 474.5, 464.5 → 476.9, 445.7 → 457.1.
+  All compressed bytes remain identical.
+- C legacy rANS initially regressed because fortified memcpy inserted dynamic
+  checks into four-byte stream writes. Assembly plus gprof identified this;
+  byte-preserving unaligned stores and explicit lane unrolling restore encode
+  speed. Legacy decode varies by about 2% between alternating measurements.
+- Full results, profiling explanation, limitations and commands are in
+  C_PORT_RESULTS.md. No ARM/macOS runtime claim; those remain CI checks.
+
 ### Cleanup and validation checkpoint (2026-11-02)
 
 - Removed unused tree routing, experimental entropy/fitting controls, tap-swap,

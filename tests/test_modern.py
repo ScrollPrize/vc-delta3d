@@ -3,6 +3,16 @@ import numpy as np
 import pytest
 from vc_delta3d import Delta3D, read_index, indexed_header_size
 
+
+@pytest.mark.parametrize("dimension", [64, 96, 256])
+def test_c_geometry_kernels(dimension):
+    # Cover fixed-size kernels and a 32-aligned non-power-of-two runtime kernel.
+    z, y, x = np.ogrid[:dimension, :dimension, :dimension]
+    data = ((7 * z + 3 * y + x) % 256).astype(np.uint8)
+    codec = Delta3D(predictor="fast")
+    frame = codec.encode(data)
+    assert codec.decode(frame) == data.tobytes()
+
 @pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
 def test_presets(preset):
     a=np.random.default_rng(718).integers(0,256,(32,32,32),dtype=np.uint8)
