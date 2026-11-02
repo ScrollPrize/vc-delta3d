@@ -1,3 +1,5 @@
+#include "ng_frame.h"
+extern "C" int vc_ng_preset_decode(const uint8_t*,size_t,uint8_t*,size_t);
 /* NCF1: explicit predictor/model/entropy references; native wavefront payload.
  * The search policy is deliberately not part of the decoding contract. */
 namespace choice_frame {
@@ -54,6 +56,8 @@ thread_local Observer observer=nullptr;
 Bytes write(unsigned d,const std::vector<Bytes>&models,const std::vector<Choice>&menu,
             const Bytes&selectors,const Bytes&symbols,const std::vector<uint16_t>&thresholds,
             const Bytes&classes,unsigned mode=1,const zero_blocks::Scan*zeros=nullptr,bool size_routed=false){
+    require(!adaptive_grid::root&&context_map.empty()&&region_banks.empty()&&!size_routed);
+    require(!estimate_dimension&&!subset_targets::enabled()&&packed_selectors);
     if(zeros&&zeros->any()){
         auto extended=menu;auto selected=selectors;unsigned bank=0;
         for(auto&c:menu)bank=std::max(bank,c.entropy+1);
@@ -63,97 +67,19 @@ Bytes write(unsigned d,const std::vector<Bytes>&models,const std::vector<Choice>
         for(size_t i=0;i<symbols.size();i++)if(!zeros->mask[i])require(symbols[i]==0);
         return write(d,models,extended,selected,symbols,thresholds,classes,mode);
     }
-    if(adaptive_grid::root&&(adaptive_grid::s2_options&2)&&!size_routed){
-        // Four sizes (2/4/8/16), each with independent predictor-bank x
-        // difficulty contexts. Keep the native 128-context ceiling: 4/8 bins
-        // per bank rather than silently overflowing the native class field.
-        require(adaptive_grid::root==16&&thresholds.size()==15);
-        unsigned step=(adaptive_grid::s2_options&16)?2:4;
-        Bytes cl=classes;for(auto&c:cl)c/=step;
-        std::vector<uint16_t>thr;for(unsigned j=step-1;j<15;j+=step)thr.push_back(thresholds[j]);
-        return write(d,models,menu,selectors,symbols,thr,cl,mode,nullptr,true);
-    }
-    if(adaptive_grid::root&&(adaptive_grid::s2_options&8)&&!size_routed){
-        require(thresholds.size()==15);unsigned step=(adaptive_grid::s2_options&16)?2:4;
-        Bytes cl=classes;for(auto&c:cl)c/=step;
-        std::vector<uint16_t>thr;for(unsigned j=step-1;j<15;j+=step)thr.push_back(thresholds[j]);
-        return write(d,models,menu,selectors,symbols,thr,cl,mode,nullptr,true);
-    }
-    unsigned K=thresholds.size()+1;
-    require(models.size()<=4&&!menu.empty()&&menu.size()<=60&&K>=2&&K<=32&&mode<=1);
-    bool size_banks=adaptive_grid::root&&(adaptive_grid::s2_options&2)&&size_routed;
-    bool mapped=!context_map.empty(),regional=!region_banks.empty();require(!mapped||(!size_banks&&adaptive_grid::root==32));
-    require(!regional||(!mapped&&!size_banks&&region_banks.size()==size_t(d/2)*(d/2)*(d/2)));
-    Bytes leaf_levels;if(size_banks||mapped){leaf_levels.resize(selectors.size());adaptive_grid::serialize(selectors,d,&leaf_levels);}
-    unsigned banks=1;for(auto&c:menu){require(c.predictor<=zero_predictor&&(c.model==no_model||c.model<models.size())&&c.entropy<16);if(c.predictor==zero_predictor)require(c.model==no_model&&c.weights==small_bank::Weight{});banks=std::max(banks,c.entropy+1);}if(mapped){require(context_map.size()==5*banks);banks=1+*std::max_element(context_map.begin(),context_map.end());}else if(size_banks)banks*=4;require(K*banks<=128);
-    if(regional){banks=1+*std::max_element(region_banks.begin(),region_banks.end());require(K*banks<=128);}
-    Bytes header;put32(header,d);put32(header,choice_grid::mode_word(mode|(size_banks?2:0)|(mapped?4:0)|(regional?8:0)));put32(header,models.size());put32(header,menu.size());put32(header,banks);
-    for(auto&p:models){put32(header,p.size());packed_bank::append(header,p);}
-    for(auto&c:menu){header.push_back(c.predictor);header.push_back(c.model);header.push_back(c.entropy);header.push_back(0);for(auto w:c.weights)put32(header,uint32_t(w));}
-    if(mapped){put32(header,context_map.size());packed_bank::append(header,context_map);}
-    require(selectors.size()==N/choice_grid::volume());
-    const auto&encoded_selectors=selectors;require(!encoded_selectors.empty());
-    bool uniform=std::all_of(encoded_selectors.begin(),encoded_selectors.end(),[&](auto c){return c==encoded_selectors[0];});
-    bool packed=packed_selectors&&!adaptive_grid::root;
-    bool raw_tree=adaptive_grid::root&&(adaptive_grid::s2_options&4);
-    put32(header,uniform?encoded_selectors[0]:raw_tree?253:packed?254:255);
-    if(!uniform){
-        if(adaptive_grid::root){auto tree=adaptive_grid::serialize(selectors,d);put32(header,adaptive_grid::root);put32(header,tree.size());auto s=raw_tree?tree:pack_stream(tree,true);put32(header,s.size());packed_bank::append(header,s);}
-        else {auto s=packed?pack_ids(encoded_selectors,menu.size()):pack_stream(encoded_selectors,true);put32(header,s.size());packed_bank::append(header,s);}
-    }
-    if(regional)write_regions(header,region_banks,d);
-    if(uniform&&menu.at(encoded_selectors[0]).predictor==zero_predictor){
-        auto z=packed_bank::compress(header);Bytes result={'N','C',uint8_t(adaptive_grid::root?'A':'F'),'1'};put32(result,header.size());put32(result,z.size());packed_bank::append(result,z);
-        if(estimate_dimension==d&&retain_estimates)prepared[choice_grid::edge()]={d,{},{},{},{},result};
-        if(observer)observer(d,models,menu,selectors,symbols,thresholds,classes,mode,result);return result;
-    }
-    Bytes par;int max_delta=-1;
-    for(auto id:encoded_selectors){require(id<menu.size());auto m=menu[id].model;if(m==no_model)continue;
-        const auto&p=models[m];require(p.size()>=6);int delta=std::max(int(int8_t(p[2])),int(int8_t(p[3])));
-        if(delta>max_delta){max_delta=delta;par=p;}
-    }
-    if(par.empty()){par.resize(4096);size_t n=0;require(ng_bank_empty_model(par.data(),par.size(),&n)==0);par.resize(n);}
-    // Retain native tap geometry, replace entropy thresholds and zero biases.
-    require(par.size()>=6&&par[4]>=2&&par[4]<=64);
-    unsigned tail=4*unsigned(par[4])-2;require(par.size()>=tail);
-    par.resize(par.size()-tail);par[4]=K*banks;
-    for(auto t:thresholds)packed_bank::put16(par,t);
-    for(unsigned i=K-1;i<K*banks-1;i++)packed_bank::put16(par,0);
-    for(unsigned i=0;i<K*banks;i++)packed_bank::put16(par,0);
-    Bytes cls=classes;unsigned nb=d/choice_grid::edge();
-    require(classes.size()==N);
-    for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++){
-        unsigned b=((z/choice_grid::edge())*nb+y/choice_grid::edge())*nb;
-        for(unsigned x=0;x<d;x+=choice_grid::edge(),b++){
-            auto s=selectors[b];require(s<menu.size());unsigned bank=K*(mapped?context_map[5*menu[s].entropy+leaf_levels[b]]:size_banks?4*menu[s].entropy+leaf_levels[b]:menu[s].entropy);
-            size_t i=(size_t(z)*d+y)*d+x;
-            for(unsigned j=0;j<choice_grid::edge();j++){require(cls[i+j]<K);cls[i+j]+=regional?K*region_banks[((size_t(z/2)*(d/2)+y/2)*(d/2)+(x+j)/2)]:bank;}
-        }
-    }
-    Bytes entropy(3*N+131072);size_t n=0,hn=0;
-    if(estimate_dimension==d){
-        double payload=0;
-        require(!subset_targets::enabled());
-        if(retain_estimates)prepared[choice_grid::edge()]={d,header,par,symbols,cls,{}};
-        require(ng_wave_estimate(par.data(),par.size(),symbols.data(),cls.data(),entropy.data(),entropy.size(),&hn,&payload)==0);
-        header.insert(header.end(),entropy.begin(),entropy.begin()+hn);
-        auto z=packed_bank::compress(header);
-        Bytes result={'N','C','F','1'};put32(result,header.size());put32(result,z.size());packed_bank::append(result,z);
-        result.resize(result.size()+size_t(std::ceil(payload)),0);return result;
-    }
-    if(subset_targets::enabled()){
-        require(subset_targets::active.size()==N);
-        require(ng_wave_encode_targets(par.data(),par.size(),symbols.data(),cls.data(),subset_targets::active.data(),entropy.data(),entropy.size(),&n)==0);
-        if(subset_targets::verify)require(ng_wave_verify_targets(entropy.data(),n,symbols.data(),cls.data(),subset_targets::active.data())==0);
-        if(std::all_of(subset_targets::active.begin(),subset_targets::active.end(),[](uint8_t v){return v!=0;})){
-            Bytes control(entropy.size());size_t cn=0;
-            require(ng_wave_encode(par.data(),par.size(),symbols.data(),cls.data(),control.data(),control.size(),&cn)==0);
-            require(cn==n&&std::equal(control.begin(),control.begin()+cn,entropy.begin()));
-        }
-    }else require(ng_wave_encode(par.data(),par.size(),symbols.data(),cls.data(),entropy.data(),entropy.size(),&n)==0);
-    require(ng_entropy_header_size(entropy.data(),n,&hn)==0);
-    auto result=finish_entropy(std::move(header),entropy,n,hn);
-    if(observer)observer(d,models,menu,selectors,symbols,thresholds,classes,mode,result);return result;
+    require(models.size()<=4&&!menu.empty()&&menu.size()<=60&&selectors.size()==N/choice_grid::volume());
+    const bool zero=std::all_of(selectors.begin(),selectors.end(),[&](auto id){return id<menu.size()&&menu[id].predictor==zero_predictor;});
+    require(zero||(symbols.size()==N&&classes.size()==N));
+    vc_ng_model model[4];vc_ng_choice choices[60];
+    for(size_t i=0;i<models.size();++i)model[i]={models[i].data(),models[i].size()};
+    for(size_t i=0;i<menu.size();++i)choices[i]={menu[i].predictor,menu[i].model,menu[i].entropy,{menu[i].weights[0],menu[i].weights[1]}};
+    uint8_t*raw=nullptr;size_t size=0;
+    require(vc_ng_frame_encode(d,choice_grid::edge(),mode,model,models.size(),choices,menu.size(),
+        selectors.data(),symbols.data(),thresholds.data(),thresholds.size()+1,classes.data(),&raw,&size)!=0);
+    std::unique_ptr<uint8_t,decltype(&std::free)> owner(raw,&std::free);
+    Bytes result(raw,raw+size);
+    if(observer)observer(d,models,menu,selectors,symbols,thresholds,classes,mode,result);
+    return result;
 }
 // Unused palette entries must not disable the shared-fit SIMD path.
 void normalize_unused_weights(unsigned count,const bool*assigned,int32_t*weights){
@@ -166,51 +92,7 @@ std::vector<Bytes> read_models(packed_bank::Reader&h,unsigned nm){
     require(nm<=4);std::vector<Bytes>params;for(unsigned k=0;k<nm;k++)params.push_back(h.take(h.u(4)));return params;
 }
 int decode(const uint8_t*src,size_t n,uint8_t*out,size_t cap){
-    require(src&&out&&n>=12&&(!memcmp(src,"NCF1",4)||!memcmp(src,"NCA1",4)));bool adaptive=src[2]=='A';Bytes prefix(src,src+12);size_t p=4;size_t hn=get32(prefix,p),zn=get32(prefix,p);require(zn<=n-12&&hn<=1024*1024);
-    auto header=packed_bank::decompress(src+12,zn,hn);packed_bank::Reader h{header};unsigned d=h.u(4),mode=h.u(4),nm=h.u(4),nc=h.u(4),nbanks=h.u(4);
-    choice_grid::Scope grid(choice_grid::wire_edge(mode));mode&=255;bool size_banks=mode&2,mapped=mode&4,regional=mode&8;
-    require(ng_geometry_valid(d,d,d)&&cap>=size_t(d)*d*d&&(mode<=5||mode==8||mode==9)&&(!(size_banks||mapped)||adaptive)&&nm<=4&&nc>=1&&nc<=60&&nbanks>=1&&nbanks<=16);mode&=1;GeometryScope scope(d,d,d);
-    auto params=read_models(h,nm);
-    std::vector<Choice>menu;unsigned base_banks=0;for(unsigned k=0;k<nc;k++){Choice c;c.predictor=h.u(1);c.model=h.u(1);c.entropy=h.u(1);require(h.u(1)==0);for(auto&w:c.weights)w=int32_t(packed_bank::signed_value(h.u(4),32));require(c.predictor<=zero_predictor&&(c.model==no_model||c.model<nm)&&c.entropy<(regional?16:mapped?4:nbanks));base_banks=std::max(base_banks,c.entropy+1);if(c.predictor==zero_predictor)require(c.model==no_model&&c.weights==small_bank::Weight{});menu.push_back(c);}
-    Bytes mapping;if(mapped){unsigned length=h.u(4);require(length==5*base_banks);mapping=h.take(length);for(auto c:mapping)require(c<nbanks);}
-    unsigned singleton=h.u(4);Bytes selectors(N/choice_grid::volume());
-    if(singleton==254){require(!adaptive);auto s=h.take(h.u(4));selectors=unpack_ids(s,selectors.size(),nc);}
-    else if(singleton==255||singleton==253){
-        require(singleton!=253||adaptive);
-        if(adaptive){unsigned r=h.u(4),count=h.u(4);require(count<=2*selectors.size());auto s=h.take(h.u(4));Bytes tree(count);if(singleton==253){require(s.size()==count);tree=std::move(s);}else unpack_stream(s.data(),s.size(),tree,true);selectors=adaptive_grid::deserialize(tree,d,r,nc);}
-        else {auto s=h.take(h.u(4));unpack_stream(s.data(),s.size(),selectors,true);}
-    }else{require(singleton<nc);std::fill(selectors.begin(),selectors.end(),singleton);}
-    Bytes regions;
-    if(regional)regions=read_regions(h,d,nbanks);
-    auto entropy=h.rest();
-    if(singleton<nc&&menu[singleton].predictor==zero_predictor){require(entropy.empty()&&n==12+zn);memset(out,0,N);return 0;}
-    require(entropy.size()>5);
-    require(entropy[4]%nbanks==0);unsigned K=entropy[4]/nbanks;
-    require(K>=2&&K<=32);
-    bool used[60]={};for(auto c:selectors){require(c<nc);used[c]=true;}
-    unsigned remap[4]={255,255,255,255};std::vector<Bytes>live;
-    for(unsigned i=0;i<menu.size();i++){
-        auto&c=menu[i];if(!used[i]){c.model=no_model;continue;}
-        if(c.model!=no_model){unsigned m=c.model;if(remap[m]==255){remap[m]=live.size();live.push_back(params[m]);}c.model=remap[m];}
-    }
-    params=std::move(live);
-    if(params.empty()){Bytes empty(4096);size_t en=0;require(ng_bank_empty_model(empty.data(),empty.size(),&en)==0);empty.resize(en);params.push_back(std::move(empty));}
-    using State=std::unique_ptr<void,decltype(&ng_causal_destroy)>;std::vector<State>states;void*models[48]={};int32_t weights[96]={};
-    for(unsigned k=0;k<params.size();k++){auto&q=params[k];states.emplace_back(k?ng_causal_create_model(q.data(),q.size()):ng_causal_create(q.data(),q.size()),ng_causal_destroy);require(bool(states.back()));for(unsigned m=0;m<12;m++)models[12*k+m]=states.back().get();}
-    bool assigned[48]={};for(auto&c:menu)if(c.model!=no_model){unsigned id=12*c.model+c.predictor;for(unsigned j=0;j<2;j++){require(!assigned[id]||weights[2*id+j]==c.weights[j]);weights[2*id+j]=c.weights[j];}assigned[id]=true;}
-    // Unreferenced palette entries must not falsely disable the shared-fit
-    // SIMD path. Their coefficients are never consumed by a saved selector.
-    normalize_unused_weights(params.size(),assigned,weights);
-    Bytes canonical(selectors.size()),banks(selectors.size()),leaf_levels;
-    if(size_banks||mapped){adaptive_grid::Scope tree(mapped?32:16);leaf_levels.resize(selectors.size());adaptive_grid::serialize(selectors,d,&leaf_levels);}
-    for(size_t i=0;i<selectors.size();i++){require(selectors[i]<nc);auto&c=menu[selectors[i]];canonical[i]=c.predictor==zero_predictor?0:c.model==no_model?c.predictor:12+12*c.model+c.predictor;banks[i]=regional?0:mapped?mapping[5*c.entropy+leaf_levels[i]]:size_banks?4*c.entropy+leaf_levels[i]:c.entropy;require(banks[i]<nbanks);}
-    if(regional){
-        unsigned old_n=d/choice_grid::edge(),ratio=choice_grid::edge()/2,n2=d/2;Bytes expanded(regions.size());
-        for(unsigned z=0;z<n2;z++)for(unsigned y=0;y<n2;y++)for(unsigned x=0;x<n2;x++)expanded[adaptive_grid::index(x,y,z,n2)]=canonical[adaptive_grid::index(x/ratio,y/ratio,z/ratio,old_n)];
-        choice_grid::Scope fine(2);
-        return ng_choice_wave_decode(models,12*params.size(),mode,weights,expanded.data(),nbanks>1?regions.data():nullptr,out,entropy.data(),entropy.size(),src+12+zn,n-12-zn,K);
-    }
-    return ng_choice_wave_decode(models,12*params.size(),mode,weights,canonical.data(),nbanks>1?banks.data():nullptr,out,entropy.data(),entropy.size(),src+12+zn,n-12-zn,K);
+    return vc_ng_preset_decode(src,n,out,cap);
 }
 Bytes empty_frame(unsigned d){return write(d,{},{{zero_predictor,no_model,0,{}}},Bytes(N/choice_grid::volume()),{},std::vector<uint16_t>(15),{});}
 }

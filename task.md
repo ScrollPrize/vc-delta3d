@@ -16,6 +16,19 @@
 
 ## Sequence
 
+### Checkpoint: native C frames and Fast (2026-11-02)
+
+- NCF1 writer/decoder, threshold DP/coordinate search, occupancy/screening and
+  fixed predictor SIMD kernels are now C. Fast's complete encoder orchestration
+  is C, with the original screening, fit, zero-block handling and DP64 choices.
+- All 576 frozen corpus frames decode and re-encode byte-identically, including
+  Fast using the new C path. Four native regression executables pass.
+- Removed the retired tree leaf from C++/Python enums; it remains rejected by
+  the C indexed parser. Original reference branch/build remain untouched.
+- Remaining: medium/slow/slower orchestration, rectangular payload orchestration,
+  removal of their obsolete experimental dependencies, C-only linking and final
+  performance/portability validation. This is not yet a complete pure-C port.
+
 1. Freeze baseline frames/results; identify the retained call graph.
 2. Extract legacy filters/rANS into shared C, with original wrappers calling C.
 3. Port retained preset search/framing orchestration to C, reusing C SIMD kernels.

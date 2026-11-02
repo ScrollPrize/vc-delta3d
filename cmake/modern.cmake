@@ -4,7 +4,8 @@ find_path(VC_ZSTD_INCLUDE_DIR zstd.h REQUIRED)
 find_library(VC_ZSTD_LIBRARY NAMES zstd REQUIRED)
 set_property(TARGET vc_delta3d PROPERTY SOURCES src/codec.cpp src/ng/delta_bridge.cpp)
 target_sources(vc_delta3d PRIVATE src/indexed.cpp src/indexed.c src/ng/volcodec_ng_lib.c src/ng/delta_residual.c
-    src/ng/ng_delta_experiment.cpp)
+    src/ng/ng_delta_experiment.cpp src/ng/ng_frame.c src/ng/ng_thresholds.c src/ng/ng_screen.c src/ng/ng_predict.c
+    src/ng/ng_fit.c src/ng/ng_fast.c)
 target_compile_definitions(vc_delta3d PRIVATE VC_DELTA3D_MODERN=1)
 target_include_directories(vc_delta3d PRIVATE src src/ng "${VC_ZSTD_INCLUDE_DIR}")
 target_link_libraries(vc_delta3d PRIVATE "${VC_ZSTD_LIBRARY}" Threads::Threads)

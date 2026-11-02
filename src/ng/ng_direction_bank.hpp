@@ -150,82 +150,10 @@ thread_local std::chrono::steady_clock::time_point bank_detail_tick;
 thread_local double* bank_profile=nullptr;
 thread_local std::chrono::steady_clock::time_point bank_tick;
 void bank_mark(unsigned phase){if(bank_profile){auto now=std::chrono::steady_clock::now();bank_profile[phase]+=std::chrono::duration<double>(now-bank_tick).count();bank_tick=now;}}
-template<unsigned M>
-void bank_fixed_single(const uint8_t* __restrict src,uint8_t* __restrict out,unsigned d){
-    bool simd=false;
-#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    simd=!ng_runtime_only&&__builtin_cpu_supports("avx2");
-    uint8_t* outputs[12]={};outputs[M]=out;
-#endif
-    for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++){
-        const size_t row=(size_t(z)*d+y)*d;
-        out[row]=pyramid(uint8_t(src[row]-ng_directional_base(src,row,M,0,y,z,d)));
-        // Dispatch once per volume, with constant predictor and interior-axis
-        // availability. This lets the compiler vectorize independent values;
-        // the predictor definition and boundary fallback remain shared.
-        unsigned begin=1;
-#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-        if(simd&&z&&y)begin=ng_fixed_row_avx2<1u<<M>(src,outputs,row,d);
-#endif
-        for(unsigned x=begin;x<d;x++){
-            size_t i=row+x;
-            out[i]=pyramid(uint8_t(src[i]-ng_directional_base(src,i,M,1,y,z,d)));
-        }
-    }
-}
-void bank_fixed_candidates(const uint8_t* __restrict src,std::vector<Bytes>& buffers,unsigned d,unsigned mask){
-    if(ng_screen_work&&ng_screen_size==size_t(d)*d*d){
-        for(size_t i=0;i<ng_screen_size;i++)if(ng_screen_work[i]){
-            unsigned x=i%d,y=i/d%d,z=i/(size_t(d)*d);
-            for(unsigned m=0;m<12;m++)if(mask&(1u<<m))
-                buffers[m][i]=pyramid(uint8_t(src[i]-ng_directional_base(src,i,m,x,y,z,d)));
-        }
-        return;
-    }
-    if(mask!=4095){
-        // Fixed selections need only the requested predictor. Share the same
-        // boundary/predictor definition rather than constructing other arrays.
-        for(unsigned m=0;m<12;m++)if(mask&(1u<<m)){
-            switch(m){
-#define NG_FIXED_SINGLE(M) case M: bank_fixed_single<M>(src,buffers[m].data(),d);break;
-                NG_FIXED_SINGLE(0) NG_FIXED_SINGLE(1) NG_FIXED_SINGLE(2) NG_FIXED_SINGLE(3)
-                NG_FIXED_SINGLE(4) NG_FIXED_SINGLE(5) NG_FIXED_SINGLE(6) NG_FIXED_SINGLE(7)
-                NG_FIXED_SINGLE(8) NG_FIXED_SINGLE(9) NG_FIXED_SINGLE(10) NG_FIXED_SINGLE(11)
-#undef NG_FIXED_SINGLE
-            }
-        }
-        return;
-    }
-    // Generate the complete fixed palette with one shared neighborhood load.
-    uint8_t* out[12];for(unsigned m=0;m<12;m++)out[m]=buffers[m].data();
-    const size_t plane=size_t(d)*d;
-    bool simd=false;
-#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    simd=!ng_runtime_only&&__builtin_cpu_supports("avx2");
-#endif
-    for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++){
-        const size_t row=(size_t(z)*d+y)*d;
-        if(!z||!y){
-            for(unsigned m=0;m<12;m++)for(unsigned x=0;x<d;x++)out[m][row+x]=pyramid(uint8_t(src[row+x]-ng_directional_base(src,row+x,m,x,y,z,d)));
-            continue;
-        }
-        for(unsigned m=0;m<12;m++)out[m][row]=pyramid(uint8_t(src[row]-ng_directional_base(src,row,m,0,y,z,d)));
-        unsigned begin=1;
-#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-        if(simd)begin=ng_fixed_row_avx2(src,out,row,d);
-#endif
-        for(unsigned x=begin;x<d;x++){
-            size_t i=row+x;int v=src[i],a=src[i-1],b=src[i-d],c=src[i-plane];
-            int xy=a+b-src[i-d-1],xz=a+c-src[i-plane-1],yz=b+c-src[i-plane-d];
-            int xyz=xy+xz+yz-a-b-c+src[i-plane-d-1];
-            out[0][i]=pyramid(uint8_t(v));out[1][i]=pyramid(uint8_t(v-a));out[2][i]=pyramid(uint8_t(v-b));out[3][i]=pyramid(uint8_t(v-xy));
-            out[4][i]=pyramid(uint8_t(v-c));out[5][i]=pyramid(uint8_t(v-xz));out[6][i]=pyramid(uint8_t(v-yz));out[7][i]=pyramid(uint8_t(v-xyz));
-            out[8][i]=pyramid(uint8_t(v-std::clamp(xy,std::min(a,b),std::max(a,b))));
-            out[9][i]=pyramid(uint8_t(v-std::clamp(xz,std::min(a,c),std::max(a,c))));
-            out[10][i]=pyramid(uint8_t(v-std::clamp(yz,std::min(b,c),std::max(b,c))));
-            out[11][i]=pyramid(uint8_t(v-std::clamp(xyz,std::min(a,std::min(b,c)),std::max(a,std::max(b,c)))));
-        }
-    }
+void bank_fixed_candidates(const uint8_t*src,std::vector<Bytes>&buffers,unsigned d,unsigned mask){
+    uint8_t* output[12];
+    for(unsigned m=0;m<12;++m)output[m]=buffers[m].data();
+    vc_ng_fixed_candidates(src,output,d,mask);
 }
 }
 extern "C" { thread_local NG_TLS_CONSTINIT int ng_bank_detail_enabled=0; }

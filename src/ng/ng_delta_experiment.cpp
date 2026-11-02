@@ -1,3 +1,6 @@
+#include "ng_thresholds.h"
+#include "ng_screen.h"
+#include "ng_predict.h"
 // Experimental rANS frames for NG/Delta composition. No production dispatch.
 #include "residual_bridge.h"
 #include "rans_frame_bridge.hpp"
@@ -149,9 +152,7 @@ void candidate_histogram(const uint8_t* symbols,const uint8_t* classes,unsigned 
         out[c*stride][s]=split[c][s]+split[K+c][s]+split[2*K+c][s]+split[3*K+c][s];
 }
 double histogram_cost(const uint32_t* counts,int tb,bool fast) {
-    if(!fast)return ng_hist_cost(counts,tb);
-    static const auto logs=[] {std::array<double,4097> a{};for(size_t i=1;i<a.size();i++)a[i]=std::log2(double(i));return a;}();
-    return ng_hist_cost_logs(counts,tb,logs.data());
+    return vc_ng_histogram_cost(counts,tb,fast);
 }
 uint8_t candidate_symbol(const uint8_t* src,size_t i,unsigned choice,uint8_t ng) {
     return choice?pyramid(uint8_t(src[i]-delta_predict_at(src,i,choice))):ng;
@@ -179,14 +180,10 @@ Bytes histogram_choices(const uint8_t* src,const Bytes& sy,const Bytes& cl,unsig
     return selectors;
 }
 std::vector<uint16_t> activity_quantiles_histogram(const std::array<uint32_t,2560>&hist,unsigned K) {
-    std::vector<uint16_t> thresholds;uint64_t sum=0,total=0;for(auto n:hist)total+=n;
-    require(total>0);
-    for(unsigned v=0;v<hist.size() && thresholds.size()+1<K;v++) {
-        sum+=hist[v];while(thresholds.size()+1<K && sum*K>=(thresholds.size()+1)*total)thresholds.push_back(uint16_t(v));
-    }
-    return thresholds;
+    require(K>=2);std::vector<uint16_t> out(K-1);
+    require(vc_ng_quantiles(hist.data(),K,out.data())!=0);return out;
 }
-std::vector<uint16_t> activity_quantiles(const std::vector<uint16_t>& a,unsigned K) {
+std::vector<uint16_t> activity_quantiles(const std::vector<uint16_t>&a,unsigned K) {
     std::array<uint32_t,2560> hist{};for(auto v:a){require(v<hist.size());hist[v]++;}
     return activity_quantiles_histogram(hist,K);
 }
@@ -933,32 +930,15 @@ uint8_t activity_prediction(const uint8_t*src,size_t i,unsigned m,unsigned x,uns
     return clamped_delta_prediction(src,i,7,x,y,z,d);
 }
 Bytes activity_classify(const std::vector<uint16_t>&a,const std::vector<uint16_t>&thr){
-    std::array<uint8_t,2560>lut{};
-    for(unsigned v=0;v<lut.size();v++)lut[v]=std::lower_bound(thr.begin(),thr.end(),v)-thr.begin();
-    Bytes cl(a.size());for(size_t i=0;i<a.size();i++)cl[i]=lut[a[i]];return cl;
+    Bytes out(a.size());require(vc_ng_classify(a.data(),a.size(),thr.data(),thr.size()+1,out.data())!=0);return out;
 }
 std::vector<uint16_t> activity_refine(const Bytes&raw,const std::vector<uint16_t>&a,
         const std::vector<uint16_t>&old,const std::vector<uint32_t>&block,const Bytes&choices,unsigned groups,bool symbols=false,
         unsigned grid=64,bool global=false){
-    auto edges=grid?activity_quantiles(a,grid):std::vector<uint16_t>{};
-    if(!grid)for(auto t:old)for(int v=std::max(0,int(t)-16);v<=std::min(2559,int(t)+16);v++)edges.push_back(uint16_t(v));
-    edges.insert(edges.end(),old.begin(),old.end());edges.push_back(2559);
-    std::sort(edges.begin(),edges.end());edges.erase(std::unique(edges.begin(),edges.end()),edges.end());
-    unsigned E=edges.size();std::vector<Histogram>prefix((E+1)*groups);
-    std::array<unsigned,2560>bin{};for(unsigned v=0;v<bin.size();v++)bin[v]=std::lower_bound(edges.begin(),edges.end(),v)-edges.begin();
-    for(size_t i=0;i<a.size();i++)prefix[(bin[a[i]]+1)*groups+(groups>1?choices[block[i]]:0)][symbols?raw[i]:pyramid(raw[i])]++;
-    for(unsigned e=1;e<=E;e++)for(unsigned g=0;g<groups;g++)for(unsigned s=0;s<256;s++)prefix[e*groups+g][s]+=prefix[(e-1)*groups+g][s];
-    std::vector<double>cache((E+1)*(E+1),-1);
-    auto cost=[&](unsigned l,unsigned r){double&result=cache[l*(E+1)+r];if(result>=0)return result;result=0;
-        for(unsigned g=0;g<groups;g++){Histogram h{};for(unsigned s=0;s<256;s++)h[s]=prefix[r*groups+g][s]-prefix[l*groups+g][s];result+=histogram_cost(h.data(),12,true);}return result;};
-    if(global)return partition_boundaries(edges,old.size()+1,cost,true);
-    std::vector<unsigned>cuts{0};for(auto t:old)cuts.push_back(std::lower_bound(edges.begin(),edges.end(),t)-edges.begin()+1);cuts.push_back(E);
-    for(int pass=0;pass<2;pass++)for(unsigned k=1;k+1<cuts.size();k++){
-        unsigned best=cuts[k];double score=cost(cuts[k-1],best)+cost(best,cuts[k+1]);
-        for(unsigned v=std::max(1u,cuts[k-1]);v<=cuts[k+1];v++){double s=cost(cuts[k-1],v)+cost(v,cuts[k+1]);if(s<score){score=s;best=v;}}
-        cuts[k]=best;
-    }
-    std::vector<uint16_t>thr;for(unsigned k=1;k+1<cuts.size();k++)thr.push_back(edges[cuts[k]-1]);return thr;
+    require(raw.size()==a.size()&&(groups<=1||block.size()==a.size()));
+    std::vector<uint16_t> out(old.size());
+    require(vc_ng_refine_thresholds(raw.data(),a.data(),a.size(),old.data(),old.size()+1,
+        block.data(),choices.data(),choices.size(),groups,symbols,grid,global,out.data())!=0);return out;
 }
 std::vector<std::array<double,256>> activity_symbol_costs(const Bytes& symbols,const Bytes&cl,
         const std::vector<uint32_t>&block,const Bytes&sel,unsigned groups){
@@ -1085,27 +1065,14 @@ extern "C" int ng_rc_encode_fixed(const uint8_t*src,unsigned d,unsigned config,u
     ng_fit_context_mode=context;choice_frame::enabled=old;return rc;
 }
 // Stable public preset adapter; keep experimental switches out of the API.
+extern "C" int vc_ng_fast_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
 extern "C" int vc_ng_preset_encode(const uint8_t*s,unsigned d,unsigned preset,uint8_t*out,size_t cap,size_t*n){
     if(preset>3)return -1;
     const double previous=ng_fit_intercept_weight;
     ng_fit_intercept_weight=preset>=2?100.:0.;
     choice_grid::Scope fixed(4);
-    int rc=preset<2?ng_codec_encode(s,d,preset==0?3:1,out,cap,n):ng_rc_encode_fixed(s,d,preset-2,out,cap,n);
+    int rc=preset==0?vc_ng_fast_encode(s,d,out,cap,n):preset==1?ng_codec_encode(s,d,1,out,cap,n):ng_rc_encode_fixed(s,d,preset-2,out,cap,n);
     ng_fit_intercept_weight=previous;return rc;
-}
-extern "C" int vc_ng_preset_decode(const uint8_t*s,size_t n,uint8_t*out,size_t cap){
-    const int old=ng_native_fast_control;ng_native_fast_control=1;
-    int rc=ng_codec_decode(s,n,out,cap);
-    ng_native_fast_control=old;return rc;
-}
-extern "C" unsigned vc_ng_frame_dimension(const uint8_t*s,size_t n){
-    try {
-        require(s&&n>=12&&!memcmp(s,"NCF1",4));
-        Bytes prefix(s,s+12);size_t p=4;auto hn=get32(prefix,p),zn=get32(prefix,p);
-        require(hn>=4&&hn<=1024*1024&&zn<=n-12);
-        auto header=packed_bank::decompress(s+12,zn,hn);packed_bank::Reader h{header};
-        unsigned d=h.u(4);require(ng_geometry_valid(d,d,d));return d;
-    } catch(...) {return 0;}
 }
 namespace {
 Bytes encode_rect_payload(const uint8_t* src,uint32_t x,uint32_t y,uint32_t z,const int*cfg){

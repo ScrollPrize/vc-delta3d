@@ -28,18 +28,10 @@ struct Scan {
     Scan(const uint8_t*src,unsigned dimension,bool active):d(dimension){
         if(!active||!enabled)return;
         unsigned e=choice_grid::edge(),nb=d/e;empty.resize(size_t(nb)*nb*nb);
-        for(unsigned z=0;z<d;z+=e)for(unsigned y=0;y<d;y+=e)for(unsigned x=0;x<d;x+=e){
-            uint32_t bits=0;
-            for(unsigned dz=0;dz<e;dz++)for(unsigned dy=0;dy<e;dy++){
-                if(e==4){uint32_t v;memcpy(&v,src+(size_t(z+dz)*d+y+dy)*d+x,4);bits|=v;}
-                else for(unsigned dx=0;dx<e;dx++)bits|=src[(size_t(z+dz)*d+y+dy)*d+x+dx];
-            }
-            size_t b=(size_t(z/e)*nb+y/e)*nb+x/e;empty[b]=bits==0;count+=empty[b];
-        }
+        count=vc_ng_zero_scan(src,d,e,empty.data());
         if(!count){empty.clear();return;}
         mask.resize(size_t(d)*d*d);
-        for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++)for(unsigned x=0;x<d;x+=e)
-            std::fill_n(mask.data()+(size_t(z)*d+y)*d+x,e,!empty[(size_t(z/e)*nb+y/e)*nb+x/e]);
+        vc_ng_zero_mask(d,e,empty.data(),mask.data());
     }
     bool any()const{return count!=0;}
     bool filtered()const{return any()||(ng_screen_targets&&ng_screen_size==size_t(d)*d*d);}

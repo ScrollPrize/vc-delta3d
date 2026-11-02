@@ -18,7 +18,7 @@ struct IndexedOptions {
     Predictor preset=Predictor::Fast;
     std::vector<PartitionNode> partition; // empty: channel splits + cubic leaves
 };
-enum class LeafCodec : unsigned char { Choice=16, Tree=17, Rectangular=18 };
+enum class LeafCodec : unsigned char { Choice=16, Rectangular=18 };
 struct IndexedLeaf {
     std::uint32_t channel=0;
     std::array<std::uint32_t,3> originZYX{},shapeZYX{};

@@ -137,7 +137,6 @@ NB_MODULE(_codec, m)
 
     nb::enum_<vc_delta3d::LeafCodec>(m,"LeafCodec")
         .value("Choice",vc_delta3d::LeafCodec::Choice)
-        .value("Tree",vc_delta3d::LeafCodec::Tree)
         .value("Rectangular",vc_delta3d::LeafCodec::Rectangular);
     nb::class_<vc_delta3d::IndexedLeaf>(m,"IndexedLeaf")
         .def_ro("channel",&vc_delta3d::IndexedLeaf::channel)

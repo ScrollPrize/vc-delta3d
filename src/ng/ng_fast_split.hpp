@@ -22,42 +22,9 @@ thread_local int extra_uniform=-1;
 thread_local int extra_uniform_second=-1;
 thread_local unsigned last_uniform=0;
 Bytes screen_proxy(const uint8_t*src,unsigned d,const zero_blocks::Scan*zeros=nullptr){
-    unsigned side=std::min(d,32u);Bytes proxy(size_t(side)*side*side);
-    if(d<=32){std::copy_n(src,proxy.size(),proxy.data());return proxy;}
-    std::array<std::array<unsigned,3>,8> origins;unsigned nb=d/choice_grid::edge();
-    std::vector<size_t>occupied;
-    if(zeros&&zeros->any())for(size_t b=0;b<zeros->empty.size();b++)if(!zeros->empty[b])occupied.push_back(b);
-    for(unsigned k=0;k<8;k++){
-        auto&o=origins[k];o={(2*(k/4)+1)*d/4-8,(2*((k/2)%2)+1)*d/4-8,(2*(k%2)+1)*d/4-8};
-        if(zeros&&zeros->any()){
-            bool has_signal=false;
-            // Coarse16/32 grids can straddle the16³ sample's endpoints.
-            // Include every intersecting occupancy cell, not just full cells.
-            for(unsigned z=o[0]/choice_grid::edge();z<(o[0]+16+choice_grid::edge()-1)/choice_grid::edge();z++)for(unsigned y=o[1]/choice_grid::edge();y<(o[1]+16+choice_grid::edge()-1)/choice_grid::edge();y++)for(unsigned x=o[2]/choice_grid::edge();x<(o[2]+16+choice_grid::edge()-1)/choice_grid::edge();x++)
-                has_signal|=!zeros->empty[(size_t(z)*nb+y)*nb+x];
-            if(!has_signal&&!occupied.empty()){
-                size_t b=occupied[std::min(occupied.size()-1,(2*k+1)*occupied.size()/16)];
-                unsigned coords[3]={unsigned(b/(nb*nb))*choice_grid::edge(),unsigned((b/nb)%nb)*choice_grid::edge(),unsigned(b%nb)*choice_grid::edge()};
-                for(unsigned j=0;j<3;j++)o[j]=unsigned(std::clamp(int(coords[j])-4,0,int(d)-16));
-            }
-        }
-    }
-    for(unsigned z=0;z<32;z++)for(unsigned y=0;y<32;y++)for(unsigned x=0;x<32;x++){
-        auto&o=origins[(z/16)*4+(y/16)*2+x/16];
-        unsigned sz=o[0]+z%16,sy=o[1]+y%16,sx=o[2]+x%16;
-        proxy[(z*32+y)*32+x]=src[(size_t(sz)*d+sy)*d+sx];
-    }
-    // Occupied coarse blocks can still contain empty16³ interiors. Do not
-    // feed an empty proxy to the histogram/fitter for a nonempty source.
-    if(std::none_of(proxy.begin(),proxy.end(),[](uint8_t v){return v!=0;})){
-        const size_t total=size_t(d)*d*d;size_t i=0;while(i<total&&!src[i])++i;
-        if(i<total){
-            unsigned p[3]={unsigned(i/(d*d)),unsigned((i/d)%d),unsigned(i%d)};
-            for(auto&v:p)v=unsigned(std::clamp(int(v)-8,0,int(d)-16));
-            for(unsigned z=0;z<16;z++)for(unsigned y=0;y<16;y++)
-                std::copy_n(src+(size_t(p[0]+z)*d+p[1]+y)*d+p[2],16,proxy.data()+(size_t(z)*32+y)*32);
-        }
-    }
+    Bytes proxy(32u*32u*32u);
+    require(vc_ng_screen_proxy(src,d,choice_grid::edge(),
+        zeros&&zeros->any()?zeros->empty.data():nullptr,proxy.data())==0);
     return proxy;
 }
 struct Samples {

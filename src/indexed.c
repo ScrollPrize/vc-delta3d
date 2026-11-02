@@ -1,3 +1,4 @@
+#include "buffer.h"
 /* NGC1 range-access header and decode. Parsing needs only the header; each
  * leaf is decoded independently. Iterative tree traversal avoids stack overflow
  * on maliciously deep partitions. No payload is copied during index parsing. */
@@ -16,17 +17,6 @@ static uint64_t read_le(const uint8_t *p,unsigned n) {
 }
 static void write_le(uint8_t *p,uint64_t value,unsigned n) {
     for(unsigned i=0;i<n;++i) p[i]=(uint8_t)(value>>(8*i));
-}
-/* Shared checked geometric growth for byte buffers and traversal arrays. */
-static int reserve(void *storage,size_t *capacity,size_t count,size_t element) {
-    if(count<=*capacity) return 1;
-    if(count>SIZE_MAX/element) return 0;
-    size_t next=*capacity<=SIZE_MAX/2?*capacity*2:SIZE_MAX;
-    if(next<count) next=count;
-    if(next>SIZE_MAX/element) next=count;
-    void *old; memcpy(&old,storage,sizeof(old));
-    void *grown=realloc(old,next*element); if(!grown) return 0;
-    memcpy(storage,&grown,sizeof(grown)); *capacity=next; return 1;
 }
 static int voxels(const uint32_t s[3],uint64_t *n) {
     uint64_t v=1;
@@ -54,7 +44,7 @@ int vc_indexed_encode(const uint8_t *input,size_t input_size,const uint32_t shap
     uint8_t *out=NULL,*scratch=NULL; size_t capacity=0,scratch_cap=0,used=24;
     domain *stack=NULL; size_t stack_cap=0,pending=0,step=0;
     vc_indexed_leaf *leaves=NULL; size_t leaf_cap=0,leaf_count=0;
-    if(!reserve(&stack,&stack_cap,1,sizeof(*stack)) || !reserve(&out,&capacity,24,1)) goto fail;
+    if(!vc_reserve(&stack,&stack_cap,1,sizeof(*stack)) || !vc_reserve(&out,&capacity,24,1)) goto fail;
     domain root={0}; memcpy(root.shape,shape,sizeof(root.shape)); root.channels=channels; stack[pending++]=root;
     while(pending) {
         domain d=stack[--pending]; vc_partition_node node={4,0,0};
@@ -77,14 +67,14 @@ int vc_indexed_encode(const uint8_t *input,size_t input_size,const uint32_t shap
                 if(cut%32 || cut>=d.shape[axis]) goto fail;
                 d.shape[axis]=cut; right.origin[axis]+=cut; right.shape[axis]-=cut;
             }
-            if(used>UINT32_MAX-5 || !reserve(&out,&capacity,used+5,1) ||
-               !reserve(&stack,&stack_cap,pending+2,sizeof(*stack))) goto fail;
+            if(used>UINT32_MAX-5 || !vc_reserve(&out,&capacity,used+5,1) ||
+               !vc_reserve(&stack,&stack_cap,pending+2,sizeof(*stack))) goto fail;
             out[used++]=(uint8_t)axis; write_le(out+used,cut,4); used+=4;
             stack[pending++]=right; stack[pending++]=d; continue;
         }
         if(node.axis!=4 || node.cut || d.channels!=1 || !leaf_shape(d.shape) || (!node.rectangular&&!cube(d.shape))) goto fail;
-        if(used>UINT32_MAX-17 || !reserve(&out,&capacity,used+17,1) ||
-           !reserve(&leaves,&leaf_cap,leaf_count+1,sizeof(*leaves))) goto fail;
+        if(used>UINT32_MAX-17 || !vc_reserve(&out,&capacity,used+17,1) ||
+           !vc_reserve(&leaves,&leaf_cap,leaf_count+1,sizeof(*leaves))) goto fail;
         vc_indexed_leaf *l=&leaves[leaf_count++];
         l->channel=d.channel; memcpy(l->origin,d.origin,sizeof(l->origin)); memcpy(l->shape,d.shape,sizeof(l->shape));
         l->codec=node.rectangular?VC_LEAF_RECTANGULAR:VC_LEAF_CHOICE;
@@ -101,7 +91,7 @@ int vc_indexed_encode(const uint8_t *input,size_t input_size,const uint32_t shap
         size_t n=(size_t)vox; const uint8_t *src;
         if(!layout && full(l,shape)) src=input+(size_t)l->channel*n;
         else {
-            if(!reserve(&scratch,&scratch_cap,n,1)) goto fail;
+            if(!vc_reserve(&scratch,&scratch_cap,n,1)) goto fail;
             size_t p=0;
             for(uint32_t z=0;z<l->shape[0];++z) for(uint32_t y=0;y<l->shape[1];++y) {
                 size_t q=((size_t)(l->origin[0]+z)*shape[1]+l->origin[1]+y)*shape[2]+l->origin[2];
@@ -111,7 +101,7 @@ int vc_indexed_encode(const uint8_t *input,size_t input_size,const uint32_t shap
             }
             src=scratch;
         }
-        if(used>SIZE_MAX-131072 || n>(SIZE_MAX-used-131072)/4 || !reserve(&out,&capacity,used+4*n+131072,1)) goto fail;
+        if(used>SIZE_MAX-131072 || n>(SIZE_MAX-used-131072)/4 || !vc_reserve(&out,&capacity,used+4*n+131072,1)) goto fail;
         size_t bytes=0; int rc;
         if(l->codec==VC_LEAF_RECTANGULAR) rc=vc_ng_rect_encode(src,l->shape[2],l->shape[1],l->shape[0],out+used,capacity-used,&bytes);
         else rc=vc_ng_preset_encode(src,l->shape[0],preset-3,out+used,capacity-used,&bytes);
