@@ -1046,8 +1046,6 @@ extern "C" int ng_codec_choice_edge(unsigned edge){
 #include "ng_fast_split.hpp"
 #include "ng_exact_partition.hpp"
 #include "ng_three_candidate.hpp"
-#include "ng_three_free.hpp"
-#include "ng_three_specialized.hpp"
 extern "C" void ng_codec_fit_memo(unsigned enabled){
     small_bank::memo::entries.clear();small_bank::memo::used=0;
     small_bank::memo::hits=small_bank::memo::misses=0;small_bank::memo::enabled=enabled!=0;
@@ -1062,10 +1060,6 @@ extern "C" int ng_codec_encode(const uint8_t*s,unsigned d,unsigned preset,uint8_
 extern "C" int ng_codec_encode_legacy_slow(const uint8_t*s,unsigned d,uint8_t*out,size_t cap,size_t*n){
     three_candidate::LegacySlowScope legacy;return ng_codec_encode(s,d,1,out,cap,n);
 }
-#include "ng_grid_experiment.hpp"
-#include "ng_sampled_size_screen.hpp"
-#include "ng_paired_size_screen.hpp"
-#include "ng_region_entropy.hpp"
 extern "C" int ng_codec_encode_shared_grid(const uint8_t*s,unsigned d,unsigned preset,unsigned policy,uint8_t*out,size_t cap,size_t*n){
     if((preset!=1&&preset!=3)||(policy!=0&&policy!=4&&policy!=8&&policy!=16&&policy!=32))return -1;
     std::fill_n(shared_grid::estimates,5,0.);shared_grid::selected_edge=4;
@@ -1079,23 +1073,20 @@ extern "C" int ng_codec_encode_zero_control(const uint8_t*s,unsigned d,unsigned 
     if(enable>3)return -1;bool old=zero_blocks::enabled,fit=zero_blocks::mask_fits;zero_blocks::enabled=enable&1;zero_blocks::mask_fits=!(enable&2);
     int rc=ng_codec_encode(s,d,preset,out,cap,n);zero_blocks::enabled=old;zero_blocks::mask_fits=fit;return rc;
 }
-#include "ng_menu_inspect.hpp"
-#include "ng_geometry_trials.hpp"
-#include "ng_entropy_tree.hpp"
-#include "ng_hybrid_geometry.hpp"
-// RC fixed-size and size-search paths share the exact same construction.
+// Retained slow/slower presets return the selected NCF1 frame directly.
+// Previously this travelled through a tree-experiment capture/replay wrapper,
+// whose non-tree mode simply returned this same frame unchanged.
 extern "C" int ng_rc_encode_fixed(const uint8_t*src,unsigned d,unsigned config,uint8_t*out,size_t cap,size_t*n){
-    try{
-        require(config<3&&src&&out&&n);
-        std::unique_ptr<hybrid_geometry::Trial> trial(hybrid_geometry::create(src,d,1,config?4:0));
-        auto frame=hybrid_geometry::encode(*trial,config==2?7:2);
-        require(frame.size()<=cap);std::copy(frame.begin(),frame.end(),out);*n=frame.size();return 0;
-    }catch(...){return -1;}
+    if(config>1)return -1;
+    const int cfg[6]={3,3,config?3:1,16,config?160:40,1};
+    const bool old=choice_frame::enabled;choice_frame::enabled=true;
+    const int context=ng_fit_context_mode;ng_fit_context_mode=0;
+    int rc=ng_screen_pair_encode_impl(src,d,12,out,cap,n,cfg,16,3,true,nullptr,3);
+    ng_fit_context_mode=context;choice_frame::enabled=old;return rc;
 }
-#include "ng_tree_feedback.hpp"
 // Stable public preset adapter; keep experimental switches out of the API.
 extern "C" int vc_ng_preset_encode(const uint8_t*s,unsigned d,unsigned preset,uint8_t*out,size_t cap,size_t*n){
-    if(preset>4)return -1;
+    if(preset>3)return -1;
     const double previous=ng_fit_intercept_weight;
     ng_fit_intercept_weight=preset>=2?100.:0.;
     choice_grid::Scope fixed(4);
@@ -1104,29 +1095,39 @@ extern "C" int vc_ng_preset_encode(const uint8_t*s,unsigned d,unsigned preset,ui
 }
 extern "C" int vc_ng_preset_decode(const uint8_t*s,size_t n,uint8_t*out,size_t cap){
     const int old=ng_native_fast_control;ng_native_fast_control=1;
-    int rc=ng_hybrid_geometry_decode(s,n,out,cap);
+    int rc=ng_codec_decode(s,n,out,cap);
     ng_native_fast_control=old;return rc;
 }
 extern "C" unsigned vc_ng_frame_dimension(const uint8_t*s,size_t n){
     try {
-        require(s&&n>=12&&(!memcmp(s,"NCF1",4)||!memcmp(s,"HGT3",4)));
+        require(s&&n>=12&&!memcmp(s,"NCF1",4));
         Bytes prefix(s,s+12);size_t p=4;auto hn=get32(prefix,p),zn=get32(prefix,p);
         require(hn>=4&&hn<=1024*1024&&zn<=n-12);
         auto header=packed_bank::decompress(s+12,zn,hn);packed_bank::Reader h{header};
         unsigned d=h.u(4);require(ng_geometry_valid(d,d,d));return d;
     } catch(...) {return 0;}
 }
-#include "ng_rc_regions.hpp"
-#include "ng_stream_recipe.hpp"
-#include "ng_rc_stream.hpp"
-#include "ng_edge_trials.hpp"
-#include "ng_joint_context_trials.hpp"
-#include "ng_coarse_native.hpp"
-#include "ng_tap_exact.hpp"
-#include "ng_tap_transfer.hpp"
-// Flags:1 add fixed clamped predictor;2 choice-conditioned tables;
-// 4 refine thresholds;8 repeat threshold fitting during selector refinement.
-// Always retain the old complete NAB1/NAC1 frame if the experiment loses.
+namespace {
+Bytes encode_rect_payload(const uint8_t* src,uint32_t x,uint32_t y,uint32_t z,const int*cfg){
+    require(src&&cfg&&ng_geometry_valid(x,y,z));
+    GeometryScope geometry(x,y,z);return encode(src,cfg,504,0,false);
+}
+int decode_rect_payload(const uint8_t* src,size_t n,uint32_t x,uint32_t y,uint32_t z,uint8_t*dst,size_t cap,int scalar){
+    require(src&&dst&&n>=10&&ng_geometry_valid(x,y,z)&&cap>=size_t(x)*y*z);
+    require(!std::memcmp(src,"NDB2",4)&&src[4]==4&&src[5]==9);
+    GeometryScope geometry(x,y,z);Bytes payload(src,src+n);
+    auto out=decode(payload,nullptr,scalar);std::memcpy(dst,out.data(),out.size());return 0;
+}
+}
+extern "C" int vc_ng_rect_encode(const uint8_t*src,unsigned x,unsigned y,unsigned z,uint8_t*dst,size_t cap,size_t*n){
+    try{require(dst&&n);const int cfg[6]={3,3,1,16,40,128};auto payload=encode_rect_payload(src,x,y,z,cfg);
+        require(payload.size()<=cap);std::memcpy(dst,payload.data(),payload.size());*n=payload.size();return 0;
+    }catch(...){return -1;}
+}
+extern "C" int vc_ng_rect_decode(const uint8_t*src,size_t n,unsigned x,unsigned y,unsigned z,uint8_t*dst,size_t cap){
+    try{return decode_rect_payload(src,n,x,y,z,dst,cap,0);}catch(...){return -1;}
+}
+
 extern "C" int ng_activity_refined_encode(const uint8_t*src,int d,unsigned flags,uint8_t*out,size_t cap,size_t*written){
     try{
         unsigned conditional=flags&(32|64|128|512|1024|2048|4096|8192);
@@ -1186,6 +1187,7 @@ extern "C" int ng_activity_refined_encode(const uint8_t*src,int d,unsigned flags
         require(best.size()<=cap);std::memcpy(out,best.data(),best.size());*written=best.size();return 0;
     }catch(...){return -1;}
 }
+
 extern "C" int ng_activity_refined_decode(const uint8_t*src,size_t n,uint8_t*out,size_t cap){
     try{
         require(src&&out&&n>=20);bool conditional=!std::memcmp(src,"NAF2",4),fitted=conditional||!std::memcmp(src,"NAE1",4);if(!fitted&&std::memcmp(src,"NAD1",4))return ng_activity_blocks_decode(src,n,out,cap);
@@ -1210,50 +1212,7 @@ extern "C" int ng_activity_refined_decode(const uint8_t*src,size_t n,uint8_t*out
         return 0;
     }catch(...){return -1;}
 }
-extern "C" int ng_block_semantic_prepare(const uint8_t* src,int d,const int* cfg,uint8_t* params,size_t cap,size_t* pn,
-                                        uint8_t* choices,uint8_t* symbols,uint8_t* classes,size_t* baseline_bytes) {
-    try{
-        require(src&&cfg&&params&&pn&&choices&&symbols&&classes&&baseline_bytes&&ng_geometry_valid(d,d,d));
-        GeometryScope geometry(d,d,d);BlockHandoff h;
-        auto baseline=encode(src,cfg,504,0,false,false,&h);
-        require(h.params.size()<=cap&&h.choices.size()==N/64&&h.symbols.size()==N&&h.classes.size()==N);
-        auto check=decode(baseline);require(std::memcmp(check.data(),src,N)==0);
-        std::memcpy(params,h.params.data(),h.params.size());*pn=h.params.size();
-        std::memcpy(choices,h.choices.data(),h.choices.size());std::memcpy(symbols,h.symbols.data(),N);std::memcpy(classes,h.classes.data(),N);
-        *baseline_bytes=baseline.size()+16; // The established NDL1 shape wrapper.
-        return 0;
-    }catch(...){return -1;}
-}
-namespace {
-Bytes encode_rect_payload(const uint8_t* src,uint32_t x,uint32_t y,uint32_t z,const int*cfg){
-    require(src&&cfg&&ng_geometry_valid(x,y,z));
-    GeometryScope geometry(x,y,z);return encode(src,cfg,504,0,false);
-}
-int decode_rect_payload(const uint8_t* src,size_t n,uint32_t x,uint32_t y,uint32_t z,uint8_t*dst,size_t cap,int scalar){
-    require(src&&dst&&n>=10&&ng_geometry_valid(x,y,z)&&cap>=size_t(x)*y*z);
-    require(!std::memcmp(src,"NDB2",4)&&src[4]==4&&src[5]==9);
-    GeometryScope geometry(x,y,z);Bytes payload(src,src+n);
-    auto out=decode(payload,nullptr,scalar);std::memcpy(dst,out.data(),out.size());return 0;
-}
-}
-extern "C" int vc_ng_rect_encode(const uint8_t*src,unsigned x,unsigned y,unsigned z,uint8_t*dst,size_t cap,size_t*n){
-    try{require(dst&&n);const int cfg[6]={3,3,1,16,40,128};auto payload=encode_rect_payload(src,x,y,z,cfg);
-        require(payload.size()<=cap);std::memcpy(dst,payload.data(),payload.size());*n=payload.size();return 0;
-    }catch(...){return -1;}
-}
-extern "C" int vc_ng_rect_decode(const uint8_t*src,size_t n,unsigned x,unsigned y,unsigned z,uint8_t*dst,size_t cap){
-    try{return decode_rect_payload(src,n,x,y,z,dst,cap,0);}catch(...){return -1;}
-}
-extern "C" int ng_leaf_encode(const uint8_t* src,size_t src_n,uint32_t x,uint32_t y,uint32_t z,
-                              const int* cfg,uint8_t* dst,size_t cap,size_t* written) {
-    if(!src || !dst || !written || !cfg || !ng_geometry_valid(x,y,z) || src_n!=size_t(x)*y*z)return -1;
-    try {
-        auto payload=encode_rect_payload(src,x,y,z,cfg);
-        Bytes out={'N','D','L','1'};put32(out,x);put32(out,y);put32(out,z);
-        out.insert(out.end(),payload.begin(),payload.end());if(out.size()>cap)return -1;
-        std::memcpy(dst,out.data(),out.size());*written=out.size();return 0;
-    }catch(...){return -1;}
-}
+
 extern "C" int ng_leaf_decode(const uint8_t* src,size_t src_n,uint8_t* dst,size_t cap,int scalar) {
     if(!src || !dst || src_n<26 || std::memcmp(src,"NDL1",4))return -1;
     try {
@@ -1261,280 +1220,4 @@ extern "C" int ng_leaf_decode(const uint8_t* src,size_t src_n,uint8_t* dst,size_
         if(!ng_geometry_valid(x,y,z) || cap<size_t(x)*y*z)return -1;
         return decode_rect_payload(src+16,src_n-16,x,y,z,dst,cap,scalar);
     }catch(...){return -1;}
-}
-
-// Self-describing experimental wrapper; production NG/NDL decoders do not
-// silently reinterpret soft-class frames as the original hard-class format.
-extern "C" int ng_soft_class_encode(const uint8_t* src,unsigned d,unsigned hybrid,unsigned blend,uint8_t* dst,size_t cap,size_t* written) {
-    try{
-        require(src&&dst&&written&&ng_geometry_valid(d,d,d)&&hybrid<=1&&blend<=2);
-        GeometryScope geometry(d,d,d);SoftClassScope softness(blend);
-        const int cfg[6]={3,3,1,16,40,128};Bytes payload;
-        if(hybrid)payload=encode(src,cfg,504,0,false);
-        else {payload.resize(N*3+131072);size_t len=0;require(ng_encode_config(src,cfg,payload.data(),payload.size(),&len)==0);payload.resize(len);}
-        Bytes frame={'N','S','C','1'};put32(frame,d);put32(frame,hybrid);put32(frame,blend);
-        frame.insert(frame.end(),payload.begin(),payload.end());require(frame.size()<=cap);
-        std::memcpy(dst,frame.data(),frame.size());*written=frame.size();return 0;
-    }catch(...){return -1;}
-}
-extern "C" int ng_soft_class_decode(const uint8_t* src,size_t n,uint8_t* dst,size_t cap) {
-    try{
-        require(src&&dst&&n>16&&!std::memcmp(src,"NSC1",4));Bytes frame(src,src+n);size_t pos=4;
-        auto d=get32(frame,pos),hybrid=get32(frame,pos),blend=get32(frame,pos);
-        require(ng_geometry_valid(d,d,d)&&hybrid<=1&&blend<=2&&cap>=size_t(d)*d*d);
-        GeometryScope geometry(d,d,d);SoftClassScope softness(blend);
-        if(hybrid){Bytes payload(frame.begin()+16,frame.end());auto out=decode(payload);std::memcpy(dst,out.data(),out.size());}
-        else require(volcodec_ng_lib_decode(src+16,n-16,dst,cap)==0);
-        return 0;
-    }catch(...){return -1;}
-}
-
-// Benchmark-only entrypoint: encode both ways and require identical complete
-// leaf bytes. Decode the same frame in alternating runtime/specialized order.
-// times: two encode seconds, then repeats pairs of decode seconds. Validation
-// and caller-owned destination allocation are outside the decode timers.
-extern "C" int ng_leaf_specialization_trial(const uint8_t* src,uint32_t d,const int* cfg,int repeats,
-                                             uint64_t* bytes,double* times) {
-    struct RuntimeScope {int saved=ng_runtime_only;~RuntimeScope(){ng_runtime_only=saved;}} scope;
-    try {
-        require(src && cfg && bytes && times && repeats>=0 && (d==32 || d==64 || d==128 || d==256));
-        size_t count=size_t(d)*d*d,cap=ng_leaf_encode_bound(d,d,d);Bytes frames[2];
-        for(int variant=0;variant<2;variant++) {
-            ng_runtime_only=variant==0;frames[variant].resize(cap);size_t size=0;
-            auto start=std::chrono::steady_clock::now();
-            require(ng_leaf_encode(src,count,d,d,d,cfg,frames[variant].data(),cap,&size)==0);
-            times[variant]=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-            frames[variant].resize(size);
-        }
-        require(frames[0]==frames[1]);*bytes=frames[0].size();Bytes dst(count);
-        for(int variant=0;variant<2;variant++) {
-            ng_runtime_only=variant==0;
-            require(ng_leaf_decode(frames[0].data(),frames[0].size(),dst.data(),count,1)==0);
-            require(std::memcmp(src,dst.data(),count)==0);
-        }
-        for(int r=0;r<=repeats;r++)for(int j=0;j<2;j++) {
-            int variant=(r+j)&1;ng_runtime_only=variant==0;
-            auto start=std::chrono::steady_clock::now();
-            require(ng_leaf_decode(frames[0].data(),frames[0].size(),dst.data(),count,0)==0);
-            double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-            require(std::memcmp(src,dst.data(),count)==0);
-            if(r)times[2+2*(r-1)+variant]=elapsed;
-        }
-        return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"leaf specialization: %s\n",e.what());return -1;}
-}
-
-// Encode once; time complete decodes, validation outside the timer.
-extern "C" int ng_fast_trial(const uint8_t* src,const int* cfg,int mode,int repeats,uint64_t* sizes,double* times) {
-    try {
-        if(mode==-1) {
-            Bytes frame(volcodec_ng_lib_encode_bound());size_t size=0;
-            require(volcodec_ng_lib_encode(src,frame.data(),frame.size(),&size)==0);
-            frame.resize(size);size_t pn=0,hn=0;
-            require(ng_native_frame_sizes(frame.data(),frame.size(),&hn,&pn)==0);
-            sizes[0]=size;sizes[1]=hn;sizes[2]=pn;sizes[3]=size-hn-pn;
-            for(int r=0;r<repeats+1;r++) {
-                auto start=std::chrono::steady_clock::now();Bytes dst(N);
-                require(volcodec_ng_lib_decode(frame.data(),frame.size(),dst.data(),dst.size())==0);
-                double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-                require(std::memcmp(src,dst.data(),N)==0);
-                if(r){times[(r-1)*4]=elapsed;for(int k=1;k<4;k++)times[(r-1)*4+k]=0;}
-            }
-            return 0;
-        }
-        require(mode==504 || (mode>=1000 && mode<=1005));auto frame=encode(src,cfg,mode,0,false);
-        size_t pos=mode==504?6:5;auto meta=get32(frame,pos);size_t pn=0;
-        require(ng_parameter_size(frame.data()+pos+meta,frame.size()-pos-meta,&pn)==0);
-        sizes[0]=frame.size();sizes[1]=pos+meta;sizes[2]=pn;sizes[3]=frame.size()-pos-meta-pn;
-        auto scalar=decode(frame,nullptr,1);require(std::memcmp(src,scalar.data(),N)==0);
-        for(int r=0;r<repeats+1;r++) {
-            double phases[3]={0};auto start=std::chrono::steady_clock::now();
-            auto dst=mode==504?decode(frame):decode_fast(frame,0,phases);
-            double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-            require(std::memcmp(src,dst.data(),N)==0);
-            if(r){times[(r-1)*4]=elapsed;for(int k=0;k<3;k++)times[(r-1)*4+k+1]=phases[k];}
-        }
-        return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_fast_trial: %s\n",e.what());return -1;}
-}
-
-// [bytes, encode seconds, decode seconds, reserved].
-extern "C" int ng_class_refinement_trial(const uint8_t* src,const int* cfg,int mode,double* result) {
-    try {
-        if(mode==-1) {
-            auto start=std::chrono::steady_clock::now();
-            Bytes frame(volcodec_ng_lib_encode_bound());size_t size=0;
-            require(volcodec_ng_lib_encode(src,frame.data(),frame.size(),&size)==0);
-            frame.resize(size);
-            auto enc_end=std::chrono::steady_clock::now();Bytes dst(N);
-            require(volcodec_ng_lib_decode(frame.data(),frame.size(),dst.data(),dst.size())==0);
-            auto dec_end=std::chrono::steady_clock::now();require(std::memcmp(src,dst.data(),N)==0);
-            result[0]=double(frame.size());result[1]=std::chrono::duration<double>(enc_end-start).count();
-            result[2]=std::chrono::duration<double>(dec_end-enc_end).count();result[3]=0;return 0;
-        }
-        require((mode>=1000 && mode<=1005) || (mode>=900 && mode<=912 && mode!=909) || (mode>=10 && mode<=15) || (mode>=22 && mode<=24) || mode==34 || mode==38 || mode==46 ||
-            (mode/100>=1 && mode/100<=8 && (mode%100==4 || mode%100==8 || mode%100==16)));
-        auto start=std::chrono::steady_clock::now();auto frame=encode(src,cfg,mode,0,false);
-        auto enc_end=std::chrono::steady_clock::now();auto dst=decode(frame);
-        auto dec_end=std::chrono::steady_clock::now();require(std::memcmp(src,dst.data(),N)==0);
-        result[0]=double(frame.size());result[1]=std::chrono::duration<double>(enc_end-start).count();
-        result[2]=std::chrono::duration<double>(dec_end-enc_end).count();result[3]=0;
-        return 0;
-    } catch(const std::exception& e) {std::fprintf(stderr,"ng_class_refinement_trial: %s\n",e.what());return -1;}
-}
-
-extern "C" int ng_block_validate(const uint8_t* src,const int* cfg,int B,uint64_t* counts) {
-    try {
-        require(B==4 || B==8 || B==16);
-        auto frame=encode(src,cfg,30+B,0,false);auto dst=decode(frame);require(std::memcmp(src,dst.data(),N)==0);
-        unsigned nb=NG_BLOCK_DIM/B,nblocks=nb*nb*nb,offset=5+(nblocks*3+7)/8;
-        Bytes choices(nblocks);for(int p=0;p<8;p++)counts[p]=0;
-        for(unsigned b=0;b<nblocks;b++) {
-            for(unsigned j=0;j<3;j++)choices[b]|=((frame[5+(3*b+j)/8]>>((3*b+j)%8))&1)<<j;
-            counts[choices[b]]++;
-        }
-        require(ng_block_decode(frame.data()+offset,frame.size()-offset,choices.data(),dst.data(),1,B)==0);
-        require(std::memcmp(src,dst.data(),N)==0);return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_block_validate: %s\n",e.what());return -1;}
-}
-extern "C" int ng_joint_trial(const uint8_t* src,const int* cfg,int mode,uint64_t* stats,double* times) {
-    try {
-        require(mode>=900 && mode<=912 && mode!=909);std::fill_n(stats,24,0);
-        auto start=std::chrono::steady_clock::now();auto frame=encode_joint(src,cfg,mode);auto enc_end=std::chrono::steady_clock::now();
-        auto dst=decode_joint(frame,0);auto dec_end=std::chrono::steady_clock::now();require(std::memcmp(src,dst.data(),N)==0);
-        dst=decode_joint(frame,1);require(std::memcmp(src,dst.data(),N)==0);
-        times[0]=std::chrono::duration<double>(enc_end-start).count();times[1]=std::chrono::duration<double>(dec_end-enc_end).count();
-        stats[0]=frame.size();size_t pos=7;auto sn=get32(frame,pos);stats[1]=sn;stats[3]=11;
-        Bytes choices(N/64);unpack_stream(frame.data()+pos,sn,choices,true);pos+=sn;
-        for(auto c:choices)stats[8+c]++;
-        for(unsigned m=0;m<frame[6];m++){auto len=get32(frame,pos);stats[2]+=len;stats[3]+=4;pos+=len;}
-        while(pos<frame.size()) {
-            auto count=get32(frame,pos),len=get32(frame,pos);stats[3]+=8;
-            if(count){uint16_t freq[256];size_t used=0;require(ng_read_freq_table(frame.data()+pos,len,freq,&used)==0);stats[4]+=used;stats[5]+=len-used;stats[6]++;}
-            pos+=len;
-        }
-        require(stats[0]==stats[1]+stats[2]+stats[3]+stats[4]+stats[5]);return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_joint_trial: %s\n",e.what());return -1;}
-}
-extern "C" int ng_block_entropy_validate(const uint8_t* src,const int* cfg,int mode,uint64_t* sizes) {
-    try {
-        int B=mode%100;require(mode/100>=1 && mode/100<=8 && (B==4 || B==8 || B==16));
-        auto frame=encode(src,cfg,mode,0,false),old=encode(src,cfg,30+B,0,false);
-        auto dst=decode(frame);require(std::memcmp(src,dst.data(),N)==0);
-        dst=decode(frame,nullptr,1);require(std::memcmp(src,dst.data(),N)==0);
-        unsigned nb=NG_BLOCK_DIM/B,count=nb*nb*nb;Bytes choices(count);size_t pos=6;auto bytes=get32(frame,pos);
-        if(frame[5]&1)unpack_stream(frame.data()+pos,bytes,choices,frame[5]&8);
-        else for(unsigned b=0;b<count;b++)for(unsigned j=0;j<3;j++)choices[b]|=((frame[pos+(3*b+j)/8]>>((3*b+j)%8))&1)<<j;
-        for(unsigned b=0;b<count;b++) {
-            unsigned expected=0;for(unsigned j=0;j<3;j++)expected|=((old[5+(3*b+j)/8]>>((3*b+j)%8))&1)<<j;
-            require(choices[b]==expected);
-        }
-        sizes[0]=frame.size();sizes[1]=bytes;sizes[2]=frame.size()-10-bytes;sizes[3]=10;
-        return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_block_entropy_validate: %s\n",e.what());return -1;}
-}
-extern "C" int ng_wave_equivalence(const uint8_t* src,const int* cfg,int mode) {
-    try {
-        require(mode>=22 && mode<=24);
-        auto old=encode(src,cfg,mode-10,0,false),wave=encode(src,cfg,mode,0,false);
-        Bytes params(65536),sy(N),cl(N);std::vector<uint16_t> predictions(N);size_t pn=0;
-        require(ng_ex_prepare(src,cfg,0,0,params.data(),params.size(),&pn,sy.data(),cl.data(),predictions.data())==0);
-        unsigned K=cfg[3];require(old[5]==K && wave[5]==K);
-        // All fitted model parameters and selectors must remain bit-identical.
-        require(std::memcmp(old.data()+6,wave.data()+6,K+pn)==0);
-        auto out=decode(wave);require(std::memcmp(src,out.data(),N)==0);
-        require(ng_wave_decode(wave.data()+6+K,wave.size()-6-K,wave.data()+6,out.data(),1)==0);
-        require(std::memcmp(src,out.data(),N)==0);return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_wave_equivalence: %s\n",e.what());return -1;}
-}
-
-extern "C" int ng_wave_forced_selectors(const uint8_t* src,const int* cfg) {
-    try {
-        Bytes params(65536),sy(N),cl(N),refsy(N),refcl(N),out(N);size_t pn=0;
-        std::vector<uint16_t> base(N),activity(N),refactivity(N);
-        require(ng_ex_prepare(src,cfg,0,0,params.data(),params.size(),&pn,sy.data(),cl.data(),base.data())==0);
-        params.resize(pn);unsigned K=cfg[3];remove_class_bias(base,params,cl,K);
-        std::vector<Bytes> delta(8);const uint8_t* ptr[8]={0};
-        for(unsigned m=1;m<8;m++) {
-            delta[m]=Bytes(src,src+N);delta_apply_mask(delta[m].data(),m);
-            for(size_t i=0;i<N;i++){delta[m][i]=pyramid(delta[m][i]);require(delta[m][i]==candidate_symbol(src,i,m,0));}
-            ptr[m]=delta[m].data();
-        }
-        for(unsigned mode=0;mode<=8;mode++) {
-            Bytes selectors(K);for(unsigned c=0;c<K;c++)selectors[c]=uint8_t(mode<8?mode:c%8);
-            require(ng_selected_symbols_fast(params.data(),pn,selectors.data(),src,base.data(),ptr,sy.data(),cl.data(),activity.data())==0);
-            require(ng_selected_observe(params.data(),pn,selectors.data(),src,refsy.data(),refcl.data(),refactivity.data())==0);
-            require(sy==refsy && cl==refcl && activity==refactivity);
-            Bytes frame(N*2+65536);size_t size=0;
-            require(ng_wave_encode(params.data(),pn,sy.data(),cl.data(),frame.data(),frame.size(),&size)==0);
-            for(int scalar=0;scalar<2;scalar++) {
-                require(ng_wave_decode(frame.data(),size,selectors.data(),out.data(),scalar)==0);
-                require(std::memcmp(src,out.data(),N)==0);
-            }
-        }
-        return 0;
-    }catch(const std::exception& e){std::fprintf(stderr,"ng_wave_forced_selectors: %s\n",e.what());return -1;}
-}
-
-extern "C" int ng_wave_profile(const uint8_t* src,const int* cfg,int mode,double* times) {
-    try {
-        std::fill_n(times,11,0.0);encode_profile=times;
-        auto frame=encode(src,cfg,mode,0,false);encode_profile=nullptr;
-        decode_profile=times+6;ng_set_profile_callback(profile_tick);
-        auto dst=decode(frame);ng_set_profile_callback(nullptr);decode_profile=nullptr;
-        require(std::memcmp(src,dst.data(),N)==0);return 0;
-    }catch(...) {encode_profile=nullptr;decode_profile=nullptr;ng_set_profile_callback(nullptr);return -1;}
-}
-extern "C" int ng_original_decode_profile(const uint8_t*src,size_t n,uint8_t*out,size_t cap,double*times){
-    if(!src||!out||!times)return -1;
-    std::fill_n(times,5,0.);decode_profile=times;ng_set_profile_callback(profile_tick);
-    int rc=volcodec_ng_lib_decode(src,n,out,cap);
-    ng_set_profile_callback(nullptr);decode_profile=nullptr;return rc;
-}
-
-// Regression handoff: export actual bytes and check both decoder paths.
-extern "C" int ng_block_export_checked(const uint8_t* src,const int* cfg,uint8_t* out,size_t cap,size_t* size) {
-    try {
-        auto frame=encode(src,cfg,504,0,false);
-        require(frame.size()<=cap);*size=frame.size();std::memcpy(out,frame.data(),frame.size());
-        for(int scalar=0;scalar<2;scalar++) {
-            auto dst=decode(frame,nullptr,scalar);require(std::memcmp(src,dst.data(),N)==0);
-        }
-        return 0;
-    }catch(...){return -1;}
-}
-extern "C" int ng_choose_blocks(const uint8_t* const* symbols,int candidates,const uint8_t* classes,int K,uint8_t* choices) {
-    try{require(candidates>0&&candidates<=32&&K>=2&&K<=32);auto c=choose_blocks(symbols,candidates,classes,K,4);std::memcpy(choices,c.data(),c.size());return 0;}catch(...){return -1;}
-}
-extern "C" int ng_block_costs(const uint8_t* const* symbols,int candidates,const uint8_t* classes,int K,double* costs) {
-    try{require(candidates>0&&candidates<=32&&K>=2&&K<=32&&costs);choose_blocks(symbols,candidates,classes,K,4,costs);return 0;}catch(...){return -1;}
-}
-
-extern "C" int ng_delta_trial(const uint8_t* src,const int* cfg,int mode,unsigned mask,int unmapped,uint64_t* result) {
-    try {
-        bool local_entropy=mode>=100;mode%=100;
-        auto frame=encode(src,cfg,mode,mask,unmapped!=0,local_entropy);
-        auto reconstructed=decode(frame);
-        require(std::memcmp(src,reconstructed.data(),N)==0);
-        result[0]=frame.size();
-        // Count class selectors for interpretation; metadata is fully charged.
-        result[1]=0;result[2]=0;
-        if(mode==4 || mode==10) {
-            size_t pos=8;unsigned pn=get32(frame,pos);pos+=pn;
-            for(unsigned c=0;c<frame[7];c++) {
-                if(frame[pos+c])result[1]++;else result[2]++;
-            }
-        }
-        return 0;
-    } catch(const std::exception& e) {std::fprintf(stderr,"ng_delta_trial: %s\n",e.what());return -1;}
-}
-
-extern "C" int ng_delta_test_boundaries(const uint8_t* src) {
-    for(unsigned mask=0;mask<8;mask++) {
-        Bytes residual(src,src+N);delta_apply_mask(residual.data(),mask);
-        for(size_t i=0;i<N;i++)if(residual[i]!=uint8_t(src[i]-delta_predict_at(src,i,mask)))return -1;
-        delta_reconstruct_residuals(residual.data(),mask);
-        if(std::memcmp(src,residual.data(),N))return -1;
-    }
-    return 0;
 }

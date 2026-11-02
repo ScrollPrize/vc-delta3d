@@ -9,7 +9,7 @@ def encode(a,**kwargs):
     return compress_indexed(a.tobytes(),*a.shape[-3:],**kwargs)
 
 @pytest.mark.parametrize('last',[False,True])
-@pytest.mark.parametrize('preset',['fast','medium','slow','slower','tooslow'])
+@pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
 def test_independent_ranges_and_compact_header(last,preset):
     a=np.random.default_rng(781).integers(0,256,(3,32,32,32),dtype=np.uint8)
     raw=np.ascontiguousarray(np.moveaxis(a,0,-1)) if last else a

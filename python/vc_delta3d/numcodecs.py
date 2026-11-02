@@ -20,10 +20,6 @@ class Delta3D(numcodecs.abc.Codec):
     encoding and its complete D3D1 framing (including multi-channel containers).
     Supported inputs use the preset's native framing. Decoding detects either.
 
-    ``predictor="lpc"`` fits a per-chunk linear predictor to 8-bit fields of
-    at least 16 voxels along every axis: smaller payloads, slower encode and
-    decode. Fields it does not apply to, or where it would not be smaller,
-    use the default delta filter. Decoding needs no configuration either way.
     """
 
     codec_id = "vc-delta3d"
@@ -40,7 +36,7 @@ class Delta3D(numcodecs.abc.Codec):
             raise ValueError("vc-delta3d only supports rANS entropy coding")
         if not 1 <= int(quant) <= 255:
             raise ValueError("quant must be in [1, 255]")
-        if predictor not in ("delta", "lpc", "fast", "medium", "slow", "slower", "tooslow"):
+        if predictor not in ("delta", "fast", "medium", "slow", "slower"):
             raise ValueError("unknown predictor/preset")
         if channel_axis not in (None, "first", "last"):
             raise ValueError('channel_axis must be None, "first" or "last"')

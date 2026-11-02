@@ -45,13 +45,10 @@ vc_delta3d::Predictor parsePredictor(const std::string& name)
 {
     if (name == "delta")
         return vc_delta3d::Predictor::Delta;
-    if (name == "lpc")
-        return vc_delta3d::Predictor::Lpc;
     if (name == "fast") return vc_delta3d::Predictor::Fast;
     if (name == "medium") return vc_delta3d::Predictor::Medium;
     if (name == "slow") return vc_delta3d::Predictor::Slow;
     if (name == "slower") return vc_delta3d::Predictor::Slower;
-    if (name == "tooslow") return vc_delta3d::Predictor::TooSlow;
     throw std::invalid_argument("unknown predictor/preset");
 }
 

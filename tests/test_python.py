@@ -1,11 +1,25 @@
 import numcodecs
 import numpy as np
+import pytest
 
 from vc_delta3d import (
     Delta3D,
     decompress_into_with_magic,
     decompress_with_magic,
 )
+
+@pytest.mark.parametrize("preset", ["lpc", "tooslow"])
+def test_retired_presets_rejected(preset):
+    with pytest.raises(ValueError):
+        Delta3D(predictor=preset)
+
+
+def test_retired_lpc_frame_rejected():
+    source = np.zeros((4, 5, 6), np.uint8)
+    frame = bytearray(Delta3D(predictor="delta").encode(source))
+    frame[7] = 2
+    with pytest.raises((ValueError, RuntimeError)):
+        Delta3D().decode(frame)
 
 
 def test_roundtrip_and_registration():
@@ -60,8 +74,6 @@ def test_concurrent_roundtrip():
         assert all(pool.map(roundtrip, chunks))
 
 
-# sha256 of the LPC payload of _scroll_like((32, 40, 36), 1).
-GOLDEN_LPC_SHA256 = "4bdada89217fc9a9a46299658b143beb7c9d08e3d5474436fd88efb8a0b4eb33"
 
 
 def _scroll_like(shape, seed):
@@ -80,46 +92,6 @@ def _scroll_like(shape, seed):
     return np.clip(v, 0, 255).astype(np.uint8)
 
 
-def test_lpc_roundtrip_and_config():
-    source = _scroll_like((32, 40, 36), 1)
-    codec = Delta3D(predictor="lpc")
-    encoded = codec.encode(source)
-    assert encoded[7] == 2  # LPC predictor marker
-    assert len(encoded) < len(Delta3D(predictor="delta").encode(source))
-    decoded = np.frombuffer(codec.decode(encoded), dtype=np.uint8)
-    np.testing.assert_array_equal(decoded.reshape(source.shape), source)
-
-    config = codec.get_config()
-    assert config == {"id": "vc-delta3d", "quant": 1, "predictor": "lpc"}
-    assert numcodecs.get_codec(config).predictor == "lpc"
-    # Explicit new default prevents older readers silently encoding Delta.
-    assert Delta3D().get_config() == {"id": "vc-delta3d", "quant": 1, "predictor": "fast"}
-
-
-def test_lpc_payload_is_identical_on_every_platform():
-    # The LPC fit is exact integer accumulation plus an FMA-free double
-    # solve, and the SIMD sums are exact, so every platform must produce
-    # these bytes. A different digest means the encoder diverged from the
-    # build that recorded it (or the format changed).
-    import hashlib
-
-    encoded = Delta3D(predictor="lpc").encode(_scroll_like((32, 40, 36), 1))
-    assert encoded[7] == 2
-    assert hashlib.sha256(encoded).hexdigest() == GOLDEN_LPC_SHA256
-
-
-def test_lpc_concurrent_roundtrip():
-    from concurrent.futures import ThreadPoolExecutor
-
-    chunks = [_scroll_like((24, 24, 24), seed) for seed in range(16)]
-    codec = Delta3D(predictor="lpc")
-
-    def roundtrip(chunk):
-        decoded = np.frombuffer(codec.decode(codec.encode(chunk)), np.uint8)
-        return np.array_equal(decoded.reshape(chunk.shape), chunk)
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        assert all(pool.map(roundtrip, chunks))
 
 
 
@@ -154,20 +126,6 @@ def test_channel_axis_roundtrip_and_config():
             assert numcodecs.get_codec(config).channel_axis == axis
     assert "channel_axis" not in Delta3D().get_config()
 
-
-def test_lpc_with_channel_axis():
-    fields = [_scroll_like((24, 26, 28), seed) for seed in (1, 2, 3)]
-    source = np.stack(fields, axis=-1)
-    codec = Delta3D(predictor="lpc", channel_axis="last")
-    encoded = codec.encode(source)
-    assert encoded[4] == 2
-    assert len(encoded) < len(Delta3D(predictor="delta", channel_axis="last").encode(source))
-    output = np.empty_like(source)
-    codec.decode(encoded, out=output)
-    np.testing.assert_array_equal(output, source)
-    config = codec.get_config()
-    assert config == {"id": "vc-delta3d", "quant": 1, "predictor": "lpc", "channel_axis": "last"}
-    assert numcodecs.get_codec(config).predictor == "lpc"
 
 
 def test_channel_axis_compresses_smooth_channels_better_than_interleaving():

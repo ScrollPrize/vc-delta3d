@@ -37,6 +37,34 @@ Do not describe the intermediate mixed-language build as a finished C port.
 
 ## Progress
 
+### Second port stage (in progress)
+
+- Public `codec.h` and `indexed.h` now provide checked C entrypoints. C++
+  codec/container APIs are thin ownership/error adapters. Actual legacy filtering,
+  rANS, D3D1 scalar/channel framing, NGC1 indexing/gather/scatter and top-level
+  dispatch now execute in C. Python still uses its existing thin C++ adapter.
+- Removed LPC implementation and exposed LPC/tooslow preset options; added
+  explicit rejection tests. Retired HGT3 is rejected by public dispatch.
+- Removed four unused experiment translation units from the build. Slow/slower
+  no longer pass through the tree capture/replay wrapper: its retained mode
+  returned the exact NCF1 frame unchanged. Removed 45 now-unreferenced experiment
+  source/header files and their standalone experimental build/CABAC notes.
+  Everything remains recoverable on `feature/ng-presets`.
+- Verification: 576 frozen preset frames retain identical bytes and raw hashes;
+  96 legacy/indexed configurations also match the unmodified native build exactly.
+  121 Python tests and four native test executables pass. Legacy C tests pass
+  ASan/UBSan. New C translation units pass C11 `-Wall -Wextra -Werror` syntax checks.
+- Still unfinished: preset orchestration/framing retains C++ vectors and search
+  code; remaining experimental branches must be pruned, then ported to C. The
+  complete library still links C++ and must NOT be called a pure-C implementation.
+  Final all-channel speed comparisons and portability checks remain outstanding.
+
+Additional reproducible check:
+
+```sh
+python benchmark/verify_legacy.py --baseline <unchanged-build> --build <port-build>
+```
+
 - Created separate branch; original branch preserved. No consumer pins changed.
 - Inspection: numerical kernels already reside mostly in C; the largest C++
   reduction is experimental search orchestration and container ownership.
