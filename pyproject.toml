@@ -64,7 +64,5 @@ audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
 
 [tool.cibuildwheel.linux]
-# Runs inside each manylinux container, not on the Ubuntu host.
-before-all = "dnf install -y libzstd-devel"
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"

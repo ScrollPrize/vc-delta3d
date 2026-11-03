@@ -1,7 +1,7 @@
-/* Retained rectangular NDB2 leaf: fixed 4^3 NG/Delta choice, compact selector
- * rANS stream and the original shared native wavefront residual payload. */
+/* Rectangular encoder search; uses the SAME frame/header/selector codec as
+ * cubic leaves. No NDB2 or alternative rectangular wire representation. */
 #include "buffer.h"
-#include "ng_stream.h"
+#include "ng_frame.h"
 #include "delta_filter.h"
 #include "residual_bridge.h"
 #include <math.h>
@@ -13,15 +13,15 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
 {
     if(!src||!dst||!written||!ng_geometry_valid(x,y,z))return -1;
     ng_geometry old=ng_current_geometry;ng_current_geometry=(ng_geometry){(int)x,(int)y,(int)z};
-    size_t n=NG_N,blocks=n/64,pn=0,en=0,sn=0;
+    size_t n=NG_N,blocks=n/64,pn=0;
     uint8_t params[65536],*symbols=malloc(n),*classes=malloc(n),*delta[8]={0};
-    uint8_t *choices=calloc(blocks,1),*selector=NULL,*entropy=NULL;
+    uint8_t *choices=calloc(blocks,1),*encoded=NULL;
     uint16_t *base=malloc(n*sizeof(*base));
     double *scores=calloc(blocks*8,sizeof(*scores));
-    vc_buffer frame={0};int rc=-1;
+    size_t bytes=0;int rc=-1;
     const int cfg[6]={3,3,1,16,40,128};
     if(!symbols||!classes||!choices||!base||!scores)goto done;
-    if(ng_ex_prepare(src,cfg,0,0,params,sizeof(params),&pn,symbols,classes,base))goto done;
+    if(ng_plain_prepare_masked(src,cfg,NULL,params,sizeof(params),&pn,symbols,classes,base))goto done;
     for(size_t i=0;i<n;++i){
         size_t b=pn-32+2*classes[i];
         base[i]=(uint16_t)(base[i]-(int16_t)(params[b]|(unsigned)params[b+1]<<8));
@@ -56,33 +56,14 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
     for(size_t b=0;b<blocks;++b)for(unsigned m=1;m<8;++m)
         if(scores[8*b+m]<scores[8*b+choices[b]])choices[b]=(uint8_t)m;
     const uint8_t *delta_ptr[8];for(unsigned m=0;m<8;++m)delta_ptr[m]=delta[m];
-    if(ng_block_symbols(params,pn,choices,src,base,delta_ptr,symbols,classes,4)||
-       !vc_ng_stream_encode(choices,blocks,&selector,&sn))goto done;
-    entropy=malloc(n*2+65536);if(!entropy)goto done;
-    if(ng_wave_encode(params,pn,symbols,classes,entropy,n*2+65536,&en))goto done;
-    const uint8_t prefix[6]={'N','D','B','2',4,9};
-    if(!vc_buffer_append(&frame,prefix,6)||!vc_buffer_put(&frame,sn,4)||
-       !vc_buffer_append(&frame,selector,sn)||!vc_buffer_append(&frame,entropy,en)||frame.size>cap)goto done;
-    memcpy(dst,frame.data,frame.size);*written=frame.size;rc=0;
+    if(ng_block_symbols(params,pn,choices,src,base,delta_ptr,symbols,classes,4))goto done;
+    vc_ng_model model={params,pn};vc_ng_choice menu[8];uint16_t thresholds[15];
+    for(unsigned m=0;m<8;m++)menu[m]=(vc_ng_choice){m,m?255:0,0,{0,0}};
+    for(unsigned j=0;j<15;j++){size_t at=pn-62+2*j;thresholds[j]=(uint16_t)(params[at]|(unsigned)params[at+1]<<8);}
+    if(!vc_ng_frame_encode_shape(x,y,z,4,0,&model,1,menu,8,choices,symbols,thresholds,16,classes,&encoded,&bytes)||bytes>cap)goto done;
+    memcpy(dst,encoded,bytes);*written=bytes;rc=0;
 done:
-    free(symbols);free(classes);free(choices);free(base);free(scores);free(selector);free(entropy);free(frame.data);
+    free(symbols);free(classes);free(choices);free(base);free(scores);free(encoded);
     for(unsigned m=0;m<8;++m)free(delta[m]);
     ng_current_geometry=old;return rc;
-}
-
-int vc_ng_rect_decode(const uint8_t *src,size_t n,unsigned x,unsigned y,unsigned z,
-    uint8_t *dst,size_t cap)
-{
-    if(!src||!dst||n<10||!ng_geometry_valid(x,y,z)||cap<(size_t)x*y*z||
-       memcmp(src,"NDB2",4)||src[4]!=4||src[5]!=9)return -1;
-    size_t sn=(uint32_t)src[6]|(uint32_t)src[7]<<8|(uint32_t)src[8]<<16|(uint32_t)src[9]<<24;
-    if(sn>n-10)return -1;
-    size_t count=(size_t)(x/4)*(y/4)*(z/4);uint8_t *choices=malloc(count);if(!choices)return -1;
-    int rc=-1;ng_geometry old=ng_current_geometry;
-    ng_current_geometry=(ng_geometry){(int)x,(int)y,(int)z};
-    if(!vc_ng_stream_decode(src+10,sn,choices,count))goto done;
-    for(size_t i=0;i<count;++i)if(choices[i]>=8)goto done;
-    rc=ng_block_decode(src+10+sn,n-10-sn,choices,dst,0,4);
-done:
-    free(choices);ng_current_geometry=old;return rc;
 }

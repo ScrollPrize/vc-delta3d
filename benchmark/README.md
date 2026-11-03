@@ -40,3 +40,32 @@ symbol interposition. JSON records every repetition and load average; the report
 uses MiB/s and includes combined min/median/max. `--cpu` is Linux-only; omit it on
 macOS. Use `--report-only` with the same output directory to regenerate the report
 without any codec work. Do not rebuild or overwrite the original build.
+
+## Retained selector codec
+
+The selected implementation is `src/ng/selector.c`: whole-map choice between
+previous-ID contexts and bit-packed LZ, using one small-state rANS backend.
+No local switching, alternate context order, literal contexts or search presets.
+See [format and validation](../SELECTOR_FORMAT.md).
+
+`header_check.c` imports frozen test frames outside the production library,
+checks retained selector sizes and compact-header round trips, and compares
+decoded voxels with hashes recorded by the saved baseline decoder.
+`check_headers.py` orchestrates all 576 cases. Zstd is linked only to this test
+executable, to read the old fixtures and provide a matched compression control.
+
+Historical header/selector prototype sources have been removed from this
+checkout. All results remain in `experiments/`; recoverable sources are in:
+`/data/hendrik/compression_experiments/villa4/archives/selector_cleanup_20261103_v1/experiment_sources.tar.gz`.
+The production header is now `src/ng/header.c`; the archived general-header
+search implementation is not restored or needed to encode/decode new frames.
+
+**Re-encoding note:** historical byte-parity harnesses predate the intentional
+format change and must not be used to demand experimental compatibility.
+Only old Delta3D frames remain readable. `check_presets.py` exports exact source
+voxels using a separate saved baseline build, then checks fresh deterministic
+encoding and lossless decoding with all four current presets.
+
+Current commands/results: [header cleanup](../experiments/header_cleanup.md).
+Earlier selector measurements remain in `experiments/selector_retained.md`
+as historical results, not a description of the current frame.

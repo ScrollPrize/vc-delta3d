@@ -4,6 +4,25 @@
 #include "rans.h"
 #include <stdlib.h>
 #include <string.h>
+#include "header_tables.h"
+
+/* Same bulk coder; fixed tables are decoder constants, never transmitted. */
+int vc_ng_stream_fixed_encode(const uint8_t *src,size_t count,unsigned which,uint8_t **out,size_t *size)
+{
+    if(!out||!size)return 0;*out=NULL;*size=0;if(which>1)return 0;
+    uint32_t freq[256];for(unsigned i=0;i<256;i++)freq[i]=header_freq[which][i];
+    uint8_t *raw=NULL;size_t bytes=0;
+    if(!vc_rans_encode_frequencies(src,count,0,freq,&raw,&bytes))return 0;
+    memmove(raw,raw+512,bytes-512);*out=raw;*size=bytes-512;return 1;
+}
+int vc_ng_stream_fixed_decode(const uint8_t *src,size_t bytes,unsigned which,uint8_t *out,size_t count)
+{
+    if(which>1||bytes>SIZE_MAX-512||(!src&&bytes))return 0;
+    uint8_t *raw=malloc(bytes+512);if(!raw)return 0;
+    for(unsigned i=0;i<256;i++){raw[2*i]=(uint8_t)header_freq[which][i];raw[2*i+1]=(uint8_t)(header_freq[which][i]>>8);}
+    if(bytes)memcpy(raw+512,src,bytes);
+    int ok=vc_rans_decode(raw,bytes+512,out,count);free(raw);return ok;
+}
 
 int vc_ng_stream_encode(const uint8_t *src,size_t count,uint8_t **out,size_t *size)
 {

@@ -24,5 +24,3 @@
 #undef NG_RMASKVAL
 #undef NG_RPACKED
 #undef NG_RFUSED
-#undef NG_RSYMBOLS
-#undef NG_RSYMBOLSVECTOR

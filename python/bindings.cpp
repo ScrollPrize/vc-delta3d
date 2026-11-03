@@ -136,8 +136,7 @@ NB_MODULE(_codec, m)
     m.doc() = "VC-Delta3D compression bindings";
 
     nb::enum_<vc_delta3d::LeafCodec>(m,"LeafCodec")
-        .value("Choice",vc_delta3d::LeafCodec::Choice)
-        .value("Rectangular",vc_delta3d::LeafCodec::Rectangular);
+        .value("Choice",vc_delta3d::LeafCodec::Choice);
     nb::class_<vc_delta3d::IndexedLeaf>(m,"IndexedLeaf")
         .def_ro("channel",&vc_delta3d::IndexedLeaf::channel)
         .def_ro("origin",&vc_delta3d::IndexedLeaf::originZYX)
@@ -167,7 +166,7 @@ NB_MODULE(_codec, m)
     m.def("compress_indexed",[](nb::bytes raw,int z,int y,int x,int channels,bool last,const std::string&p,
         const std::vector<std::array<std::uint32_t,3>>&plan){
         vc_delta3d::IndexedOptions options;options.preset=parsePredictor(p);
-        for(auto n:plan){if(n[0]>4||n[2]>1)throw std::invalid_argument("invalid partition node");
+        for(auto n:plan){if(n[0]>8||n[2]>1)throw std::invalid_argument("invalid partition node");
             options.partition.push_back({vc_delta3d::SplitAxis(n[0]),n[1],bool(n[2])});}
         std::vector<std::byte> out;auto src=bytesSpan(raw);
         {nb::gil_scoped_release release;out=vc_delta3d::compressIndexed(src,{z,y,x},channels,

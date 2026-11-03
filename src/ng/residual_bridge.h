@@ -10,15 +10,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-typedef int (*ng_symbol_reader)(void*, size_t, unsigned);
 #ifdef __cplusplus
 extern thread_local NG_TLS_CONSTINIT unsigned ng_choice_edge;
 extern thread_local NG_TLS_CONSTINIT int ng_disable_avx512;
-extern thread_local NG_TLS_CONSTINIT int ng_native_fast_control;
 #else
 extern _Thread_local unsigned ng_choice_edge;
 extern _Thread_local int ng_disable_avx512;
-extern _Thread_local int ng_native_fast_control;
 #endif
 void* ng_fit_session_create(int);
 void ng_fit_session_destroy(void*);
@@ -27,23 +24,28 @@ int ng_bank_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t*
 int ng_bank_selected_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t* const*,const uint8_t*,const uint8_t*,uint8_t* const*,uint8_t*,uint16_t*);
 void* ng_causal_create(const uint8_t* params,size_t n);
 void* ng_causal_create_model(const uint8_t* params,size_t n);
-int ng_bank_wave(void* const*,unsigned,const int32_t*,const uint8_t*,uint8_t*,const uint8_t*,size_t);
 void ng_causal_destroy(void* state);
 /* config: r0,r1,r2,classes,tap budget,fit stride. Validated before use. */
 int ng_plain_prepare_masked(const uint8_t*,const int*,const uint8_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
-int ng_ex_prepare(const uint8_t*,const int*,int,unsigned,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
-int ng_ex_prepare_activity(const uint8_t*,const int*,int,unsigned,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*,uint16_t*);
-int ng_feature_prepare_masked(const uint8_t*,const int*,const uint8_t*,const uint8_t*,int,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
+int ng_feature_prepare_masked(const uint8_t*,const int*,const uint8_t*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
 int ng_feature_prepare_activity(const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint16_t*,uint32_t*);
 double ng_hist_cost(const uint32_t*,int);
 int ng_wave_encode(const uint8_t*,size_t,const uint8_t*,const uint8_t*,uint8_t*,size_t,size_t*);
-int ng_bank_wave_segments(void* const*,unsigned,const int32_t*,const uint8_t*,uint8_t*,const uint8_t*,size_t,const uint8_t*,size_t);
+/* Per-call decoder state; no experimental controls or nested TLS overrides. */
+typedef struct {
+    unsigned model_count, classes;
+    const uint8_t *banks, *payload;
+    size_t payload_size;
+    int frequent_x;
+} ng_decode_context;
 int ng_choice_wave_decode(void* const*,unsigned,unsigned,const int32_t*,const uint8_t*,const uint8_t*,uint8_t*,const uint8_t*,size_t,const uint8_t*,size_t,unsigned);
-int ng_block_decode(const uint8_t*,size_t,const uint8_t*,uint8_t*,int,int);
 int ng_entropy_header_size(const uint8_t*,size_t,size_t*);
+/* Size of the single retained model representation, from its six-byte cfg. */
+size_t ng_model_size(const uint8_t*);
 int ng_bank_empty_model(uint8_t*,size_t,size_t*);
 size_t ng_write_freq_table(uint8_t*,const uint16_t*);
 int ng_read_freq_table(const uint8_t*,size_t,uint16_t*,size_t*);
+int ng_read_freq_table_scaled(const uint8_t*,size_t,uint16_t*,unsigned,size_t*);
 int ng_block_symbols(const uint8_t*,size_t,const uint8_t*,const uint8_t*,const uint16_t*,const uint8_t* const*,uint8_t*,uint8_t*,int);
 double ng_hist_cost_logs(const uint32_t*,int,const double*);
 int ng_set_isa_limit(int); /* 0 automatic, 256 excludes AVX-512, per thread */
@@ -72,11 +74,11 @@ static inline uint8_t delta_predict_at(const uint8_t* v,size_t i,unsigned mask) 
 /* Shared exact directional bases. Clamping is before modulo conversion, not
  * clamping the wrapped byte. Missing selected axes retain the legacy fallback. */
 typedef struct {int constant,left,clamp,lo,hi;} ng_base_parts;
-static inline ng_base_parts ng_directional_parts(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d){
+static inline ng_base_parts ng_directional_parts_xyz(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d,size_t plane){
     const unsigned masks[4]={3,5,6,7};unsigned mask=m<8?m:masks[m-8];
     unsigned available=(x?1:0)|(y?2:0)|(z?4:0);
     int clamp=m>=8&&(mask&available)==mask;mask&=available;
-    size_t plane=(size_t)d*d;int b=(mask&2)?s[i-d]:0,c=(mask&4)?s[i-plane]:0;
+    int b=(mask&2)?s[i-d]:0,c=(mask&4)?s[i-plane]:0;
     int p=b+c,lo=255,hi=0;
     if(mask&2){if(b<lo)lo=b;if(b>hi)hi=b;}
     if(mask&4){if(c<lo)lo=c;if(c>hi)hi=c;}
@@ -86,8 +88,14 @@ static inline ng_base_parts ng_directional_parts(const uint8_t*s,size_t i,unsign
     if(mask==7)p+=s[i-plane-d-1];
     ng_base_parts r={p,(mask&1)!=0,clamp,lo,hi};return r;
 }
-static inline uint8_t ng_directional_base(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d){
-    ng_base_parts r=ng_directional_parts(s,i,m,x,y,z,d);int a=r.left?s[i-1]:0,p=r.constant+a;
+static inline ng_base_parts ng_directional_parts(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d){
+    return ng_directional_parts_xyz(s,i,m,x,y,z,d,(size_t)d*d);
+}
+static inline uint8_t ng_directional_base_xyz(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d,size_t plane){
+    ng_base_parts r=ng_directional_parts_xyz(s,i,m,x,y,z,d,plane);int a=r.left?s[i-1]:0,p=r.constant+a;
     if(r.clamp){if(r.left){if(a<r.lo)r.lo=a;if(a>r.hi)r.hi=a;}p=p<r.lo?r.lo:p>r.hi?r.hi:p;}
     return (uint8_t)p;
+}
+static inline uint8_t ng_directional_base(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d){
+    return ng_directional_base_xyz(s,i,m,x,y,z,d,(size_t)d*d);
 }

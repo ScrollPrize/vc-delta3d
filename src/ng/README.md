@@ -21,6 +21,12 @@ All emit NCF1 and use 4³ selector blocks. The decoder retains the frame's
 Zero blocks use the existing selector alphabet. Models and residual banks are
 referenced separately; a choice may share either without duplicating it.
 
+All selector maps use the unified codec in `selector.c`, including constants.
+They follow the compact rANS model/entropy header and precede voxel residuals.
+There are no historical selector markers, Zstd headers or experimental model
+versions. Only old Delta3D compatibility/fallback is retained. See
+[selector format](../../SELECTOR_FORMAT.md) and [header format](../../HEADER_FORMAT.md).
+
 There is no streaming state, adaptive partition search, tree entropy coder,
 LPC, tooslow, alternative fitting/refinement or user-selectable decoder trial.
 Fixed-geometry instantiations share the SAME C kernels rather than copies.
@@ -31,15 +37,24 @@ Fixed-geometry instantiations share the SAME C kernels rather than copies.
 - `ng_fit.c`, `ng_screen.c`, `ng_search.c`, `ng_select.c`,
   `ng_thresholds.c`: shared fitting, occupancy, scoring and threshold primitives.
 - `ng_predict.c`: directional candidates, including SIMD row implementations.
-- `ng_frame.c`: NCF1 validation, model/entropy metadata and selector framing.
-- `ng_rect.c`, `ng_stream.c`: rectangular NDB2 leaves and compact rANS streams.
-- `volcodec_ng_lossless.h`: original arithmetic, tap fitting, scheduling and
-  entropy/reconstruction kernels.
-- `volcodec_ng_lib.c`: internal C entrypoints and scoped kernel state.
+- `ng_frame_encode.c`, `ng_frame_decode.c`: separate leaf framing paths.
+- `selector.c`: only the retained whole-map context/LZ choice, shared scalar rANS.
+- `header.c`: one schema walk and pooled numerical header compaction.
+- `ng_rect.c`: rectangular search emitting the same NCF1 frame.
+- `ng_stream.c`: compact tables around the shared bulk rANS implementation.
+- `ng_kernel_fit.h`, `ng_kernel_encode.h`: live NG fitting and encoder kernels.
+- `ng_kernel_decode.h`: live entropy and reconstruction kernels.
+- `ng_kernel_common.h`: shared arithmetic, geometry, prediction and scheduling.
+- `ng_native_encode.c`, `ng_native_decode.c`, `ng_native_common.c`: separate
+  internal entrypoints and shared scoped state. Original standalone VCNG and
+  Huffman framing/decoding paths are removed, not retained for compatibility.
+- `ng_kernels.h`: combined include for fixed-geometry instantiation only.
 - `ng_fixed.c`: compile-time geometry specializations (32/64/128/256).
 - `ng_bank_reconstruct.h` and vector headers: integrated wavefront decoder.
 
-Public framing/dispatch lives in `../api.c`; NGC1 indexing is in `../indexed.c`.
+Public framing/dispatch lives in `../api.c`; compact NGC2 / extended NGX2
+indexing is split between `../indexed_encode.c` and `../indexed_decode.c`, with
+shared tree geometry and expansion in `../indexed_internal.h`.
 Legacy Delta3D uses shared `../delta_filter.c`, `../rans.c`, `../legacy.c`.
 The public C++ headers adapt ownership and errors; they contain no codec kernels.
 
@@ -49,5 +64,6 @@ The public C++ headers adapt ownership and errors; they contain no codec kernels
 - No fast math; floating-point contraction is disabled for fitted weights.
 - Geometry and fitting configuration are thread-local and restored by callers.
 - Runtime ISA dispatch retains portable/NEON fallbacks and AVX2 without AVX-512.
-- Changes must pass the frozen 144-chunk × four-preset byte-parity harness.
-  See repository `task.md` for commands and performance measurements.
+- Format changes are allowed; exact decoded voxels, not old new-format bytes,
+  are the invariant. Frozen old frames are imported only by the external test
+  harness, never by the codec. See `task.md` for validation commands.

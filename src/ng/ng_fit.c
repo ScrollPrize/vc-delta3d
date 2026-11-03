@@ -45,7 +45,7 @@ int vc_ng_fit_input(vc_ng_fit *fit, const uint8_t *src, const int *cfg,
         rc = ng_feature_prepare_activity(src, cfg, feature, fit->weights,
             fit->params, 65536, &fit->param_size, fit->symbols, activity, histogram);
     } else {
-        rc = ng_feature_prepare_masked(src, cfg, feature, mask, 1, fit->weights,
+        rc = ng_feature_prepare_masked(src, cfg, feature, mask, fit->weights,
             fit->params, 65536, &fit->param_size, fit->symbols, classes, fit->base);
     }
     if (rc) goto done;

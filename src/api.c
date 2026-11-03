@@ -7,16 +7,17 @@
 #include <vc_delta3d/indexed.h>
 int vc_ng_preset_encode(const unsigned char*,unsigned,unsigned,unsigned char*,size_t,size_t*);
 int vc_ng_preset_decode(const unsigned char*,size_t,unsigned char*,size_t);
-unsigned vc_ng_frame_dimension(const unsigned char*,size_t);
+int vc_ng_frame_shape(const unsigned char*,size_t,unsigned[3]);
 #endif
 static const uint8_t magic[4]={'D','3','D','1'};
 vc_encode_options vc_default_options(void) {
     vc_encode_options opt={{0,0,0},0,0,1,1,VC_FAST}; return opt;
 }
 void vc_free(void *p) { free(p); }
-static unsigned dimension(const uint8_t *src,size_t size) {
+static size_t frame_bytes(const uint8_t *src,size_t size) {
 #ifdef VC_DELTA3D_MODERN
-    if(src && size>=4 && !memcmp(src,"NCF1",4)) return vc_ng_frame_dimension(src,size);
+    unsigned shape[3];
+    if(vc_ng_frame_shape(src,size,shape))return (size_t)shape[0]*shape[1]*shape[2];
 #else
     (void)src; (void)size;
 #endif
@@ -60,8 +61,8 @@ int vc_frame_inspect(const uint8_t *src,size_t size,vc_frame_info *out) {
         vc_index_free(&index); return 1;
     }
 #endif
-    unsigned d=dimension(src,size);
-    if(d) { out->decoded_bytes=(size_t)d*d*d; out->channels=1; out->quantization=1; return 1; }
+    size_t bytes=frame_bytes(src,size);
+    if(bytes) { out->decoded_bytes=bytes; out->channels=1; out->quantization=1; return 1; }
     vc_legacy_info info;
     if(!vc_legacy_probe(src,size,magic,&info)) return 0;
     out->decoded_bytes=info.bytes; out->channels=info.channels; out->quantization=info.quantization;
@@ -74,8 +75,8 @@ int vc_decompress_with_magic(const uint8_t *src,size_t size,const uint8_t expect
 #ifdef VC_DELTA3D_MODERN
     if(!memcmp(expected,magic,4)) {
         if(vc_indexed_header_size(src,size)) return vc_indexed_decode(src,size,out,count);
-        unsigned d=dimension(src,size);
-        if(d) return count==(size_t)d*d*d && vc_ng_preset_decode(src,size,out,count)==0;
+        size_t bytes=frame_bytes(src,size);
+        if(bytes) return count==bytes && vc_ng_preset_decode(src,size,out,count)==0;
     }
 #endif
     return vc_legacy_decode(src,size,expected,out,count);

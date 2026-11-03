@@ -4,7 +4,8 @@
 
 Branch: `refactor/c-only-presets`. The original `feature/ng-presets`
 branch is preserved at `45339743b450ff707d21fb742dc1b3b2bf99306d`.
-The port retains fast, medium, slow, slower, their NCF1/NGC1/NDB2 framing,
+The original port retained fast, medium, slow, slower and NCF1/NGC1/NDB2 framing
+(NDB2 and historical NCF1 readers have since been removed; see HEADER_FORMAT.md),
 and legacy Delta3D encoding, decoding and automatic fallback. LPC, tooslow,
 tree routing and experimental streaming/adaptive encoders are removed.
 

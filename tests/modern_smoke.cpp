@@ -23,7 +23,7 @@ int main() {
     for(auto layout:{ChannelLayout::First,ChannelLayout::Last}){
         auto f=compressChannels(both,{32,32,32},2,layout,1);
         auto d=decompress(f,both.size());assert(d&&*d==both&&channelCount(f)==2);
-        auto hn=indexedHeaderSize(f);assert(hn&&*hn==63);
+        auto hn=indexedHeaderSize(f);assert(hn&&*hn==22);
         auto index=readIndex(std::span(f).first(*hn),f.size());assert(index.leaves.size()==2);
         for(const auto&leaf:index.leaves){
             std::vector<std::byte> out(a.size());

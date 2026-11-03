@@ -4,9 +4,6 @@ NG_PATTR static void NG_PNAME(const uint8_t *row, const vcn_lc_plist *pl, uint16
 ,const uint8_t*e,size_t ri,const uint32_t*table,uint8_t*classes
 #endif
 ) {
-#ifndef NG_PFUSED
-
-#endif
   const int n1 = pl->nlev[0], n2 = pl->nlev[1], n3 = pl->npair;
   for (int x = 0; x < VCN_LC_D; x += NG_PWIDTH) {
     if(!(needed & ((NG_PWIDTH==64?3u:1u)<<(x>>5)))) {memset(pre+x,0,NG_PWIDTH*sizeof(*pre));continue;}

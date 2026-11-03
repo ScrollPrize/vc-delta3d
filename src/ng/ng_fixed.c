@@ -8,8 +8,7 @@
 #define NG_FIXED_NAME(s) NG_FIXED_NAME_EXPAND(NG_FIXED_GEOMETRY,s)
 #include "ng_geometry.h"
 #include "residual_bridge.h"
-#define VCN_LC_TICK(k) ((void)0)
-#include "volcodec_ng_lossless.h"
+#include "ng_kernels.h"
 #include "ng_activity_values.h"
 int NG_FIXED_NAME(_activity_values)(const uint8_t*s,uint16_t*a,int symbols,uint32_t*h){return ng_activity_values_impl(s,a,symbols,h);}
 #include "ng_bank_symbols.h"
@@ -18,14 +17,10 @@ int NG_FIXED_NAME(_bank_symbols)(unsigned c,const uint8_t*const*p,const size_t*n
 }
 #include "ng_causal_state.h"
 #include "ng_bank_reconstruct.h"
-int NG_FIXED_NAME(_bank_wave)(void* const* states,unsigned mode,const int32_t*w,const uint8_t*c,uint8_t*out,const uint8_t*e,size_t n){
-    return ng_bank_reconstruct_core(states,mode,w,c,out,e,n);
+int NG_FIXED_NAME(_bank_wave)(void* const* states,unsigned mode,const int32_t*w,const uint8_t*c,uint8_t*out,const uint8_t*e,size_t n,const ng_decode_context*ctx){
+    return ng_bank_reconstruct_core(states,mode,w,c,out,e,n,ctx);
 }
 
 int NG_FIXED_NAME(_encode_ex)(const uint8_t* src,const void* cfg,uint8_t* out,size_t cap,size_t* n,uint8_t* sy,uint8_t* cl) {
     return vcn_lc_encode_ex(src,(const vcn_lc_cfg*)cfg,out,cap,n,sy,cl);
-}
-int NG_FIXED_NAME(_decode_core)(const uint8_t* p,size_t n,uint8_t* dst,ng_symbol_reader reader,void* ctx,
-                          const uint8_t* selectors,int scalar,int B,const uint8_t* sy,const uint8_t* contexts) {
-    return vcn_lc_decode_core(p,n,dst,reader,ctx,selectors,scalar,B,sy,contexts);
 }

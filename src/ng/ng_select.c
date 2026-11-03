@@ -41,7 +41,7 @@ int vc_ng_select(const uint8_t*const* symbols,const uint8_t*const* classes,
     double *scores=calloc(blocks*count,sizeof(*scores));if(!scores)return 0;
     int vector=0;
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    vector=!ng_runtime_only&&__builtin_cpu_supports("avx2")&&n%16==0;
+    vector=__builtin_cpu_supports("avx2")&&n%16==0;
     if(vector)for(size_t i=0;i<n;i+=16){
         for(unsigned j=0;j<16;++j)if(block[i+j]!=block[i]+j/4){vector=0;break;}
         if(!vector)break;

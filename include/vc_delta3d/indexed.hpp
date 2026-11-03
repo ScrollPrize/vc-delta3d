@@ -3,10 +3,12 @@
 #include <cstdint>
 
 namespace vc_delta3d {
-// Preorder binary partition. A split's first subtree immediately follows it,
+// Preorder partition. A split's first subtree immediately follows it,
 // then its second subtree. Spatial cuts are relative voxel extents (32-grid);
 // channel cuts are relative channel counts. No padding or overlapping leaves.
-enum class SplitAxis : unsigned char { Z=0, Y=1, X=2, Channel=3, Leaf=4 };
+// Repeats have one child template and cut stores the repetition count.
+enum class SplitAxis : unsigned char { Z=0, Y=1, X=2, Channel=3, Leaf=4,
+    RepeatZ=5, RepeatY=6, RepeatX=7, RepeatChannel=8 };
 struct PartitionNode {
     SplitAxis axis=SplitAxis::Leaf;
     std::uint32_t cut=0;
@@ -16,9 +18,9 @@ struct PartitionNode {
 };
 struct IndexedOptions {
     Predictor preset=Predictor::Fast;
-    std::vector<PartitionNode> partition; // empty: channel splits + cubic leaves
+    std::vector<PartitionNode> partition; // empty: channel repeat + cubic leaves
 };
-enum class LeafCodec : unsigned char { Choice=16, Rectangular=18 };
+enum class LeafCodec : unsigned char { Choice=16 };
 struct IndexedLeaf {
     std::uint32_t channel=0;
     std::array<std::uint32_t,3> originZYX{},shapeZYX{};
@@ -33,7 +35,7 @@ struct ChunkIndex {
     std::vector<IndexedLeaf> leaves;
 };
 
-// NGC1 only. Read >=8 bytes first; nullopt means incomplete/invalid prefix.
+// NGC2 compact / NGX2 extended. Read >=8 bytes; nullopt means invalid/incomplete.
 // Read the rest of this many header bytes, then inspect without any payload.
 std::optional<std::uint32_t> indexedHeaderSize(std::span<const std::byte> prefix);
 // Validates tree coverage, geometry, codecs, offsets and exact object length.

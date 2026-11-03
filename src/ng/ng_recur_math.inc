@@ -1,6 +1,6 @@
             NG_RV q;
             if(simple){
-                NG_RV first=(trial&512)&&!x?w0:wx;
+                NG_RV first=homogeneous&&!x?w0:wx;
                 q=NG_RADD(NG_BASE_PRE,NG_RADD(NG_RMUL(first,p0),NG_RADD(NG_RMUL(w1,p1),NG_RMUL(w2,p2))));
             }else if(xyz){
                 NG_RV bounds=NG_BASE_BOUNDS;
@@ -26,18 +26,10 @@
             }
             NG_RV flip=NG_RSRA(NG_RSLL(q,8),15);
             NG_RV raw;
-#ifdef NG_RSYMBOLS
-#ifdef NG_RSYMBOLSVECTOR
-            NG_RV sy=register_symbols;
-#else
-            NG_RV sy=_mm512_cvtepu8_epi16(_mm256_loadu_si256((const __m256i*)(symbols+x*32)));
-#endif
-            raw=NG_RXOR(NG_RSRL(sy,1),NG_RSUB(NG_RSET(0),NG_RAND(sy,one)));
-            NG_ROUT(errors+x*32,NG_RSRL(NG_RADD(sy,one),1));
-#elif defined(NG_RPACKED)
+#ifdef NG_RPACKED
             raw=_mm512_cvtepu8_epi16(_mm256_loadu_si256((const __m256i*)raw_bytes[x]));
 #else
-            raw=(trial&2)?NG_RSRL(NG_COMPACT_LOAD(flags),8):NG_COMPACT_LOAD(residual);
+            raw=NG_RSRL(NG_COMPACT_LOAD(flags),8);
 #endif
             NG_RV residual=NG_RSUB(NG_RXOR(raw,flip),flip);
             NG_RV v=NG_RAND(bytes,NG_RADD(NG_RSRL(NG_RADD(q,NG_RSET(128)),8),residual));

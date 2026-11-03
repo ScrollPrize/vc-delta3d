@@ -5,8 +5,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Wire values are stable; 17 (retired tree codec) is intentionally absent. */
-enum { VC_LEAF_CHOICE=16, VC_LEAF_RECTANGULAR=18 };
+/* One leaf representation for both cubic and rectangular shapes. */
+enum { VC_LEAF_CHOICE=16 };
 typedef struct {
     uint32_t channel, origin[3], shape[3];
     unsigned codec;
@@ -19,9 +19,11 @@ typedef struct {
     vc_indexed_leaf *leaves;
     size_t leaf_count;
 } vc_chunk_index;
-/* Preorder partition: axes 0/1/2 spatial, 3 channel, 4 leaf.
+/* Preorder partition: axes 0/1/2 spatial, 3 channel, 4 leaf;
+ * 5/6/7/8 repeat Z/Y/X/channel. Repeat cut is the repetition count (>=2),
+ * followed by ONE subtree reused in equally sized, disjoint regions.
  * Spatial cuts must be positive multiples of 32. An empty plan selects the
- * canonical channel/cubic partition. Explicit rectangular leaves use NDB2. */
+ * canonical channel/cubic partition. Rectangular is an encoder policy only. */
 typedef struct { unsigned axis; uint32_t cut; unsigned rectangular; } vc_partition_node;
 int vc_indexed_encode(const uint8_t*, size_t, const uint32_t shape[3], uint32_t channels,
                       unsigned layout, unsigned preset, const vc_partition_node*, size_t nodes,

@@ -129,6 +129,7 @@ static void ransBuildEncTable(const uint32_t freq[256], RansEncSym enc[256])
 }
 
 // Compresses `input` into [headerReserve][freq table][states+stream].
+static int ransEncodeFrequencies(const uint8_t*,size_t,size_t,const uint32_t[256],uint8_t**,size_t*);
 int vc_rans_encode(const uint8_t *in, size_t n, size_t headerReserve,
                    uint8_t **result, size_t *resultSize)
 {
@@ -150,6 +151,23 @@ int vc_rans_encode(const uint8_t *in, size_t n, size_t headerReserve,
 
     uint32_t freq[256];
     vc_rans_normalize(hist, n, freq);
+    return ransEncodeFrequencies(in,n,headerReserve,freq,result,resultSize);
+}
+
+int vc_rans_encode_frequencies(const uint8_t *in,size_t n,size_t headerReserve,
+                   const uint32_t freq[256],uint8_t **result,size_t *resultSize)
+{
+    if(!result||!resultSize||!freq||(!in&&n))return 0;
+    *result=NULL;*resultSize=0;
+    if(headerReserve>SIZE_MAX-640||n>(SIZE_MAX-headerReserve-640)/2)return 0;
+    unsigned total=0;for(unsigned s=0;s<256;s++){if(freq[s]>4096)return 0;total+=freq[s];}
+    if(total!=4096)return 0;
+    for(size_t i=0;i<n;i++)if(!freq[in[i]])return 0;
+    return ransEncodeFrequencies(in,n,headerReserve,freq,result,resultSize);
+}
+static int ransEncodeFrequencies(const uint8_t *in,size_t n,size_t headerReserve,
+                   const uint32_t freq[256],uint8_t **result,size_t *resultSize)
+{
     RansEncSym enc[256];
     ransBuildEncTable(freq, enc);
 

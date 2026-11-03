@@ -13,7 +13,6 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <zstd.h>
 
 enum { CANDIDATES=25, MODELS=13, SAMPLE_N=32768, SAMPLE_BLOCKS=512 };
 typedef struct {
@@ -44,22 +43,16 @@ static void plus_one_cost(vc_ng_distribution *s)
 
 static double model_cost(const search *s,const plan *p)
 {
-    unsigned used[MODELS]={0},first=MODELS;
-    for(unsigned j=0;j<p->count;++j)if(p->menu[j]>=12)used[p->menu[j]-12]=1;
-    vc_buffer meta={0};uint8_t *compressed=NULL;double cost=-1;
-    for(unsigned k=0;k<MODELS;++k)if(used[k]){
-        if(first==MODELS)first=k;
-        if(!vc_buffer_append(&meta,s->fit[k].params,s->fit[k].param_size))goto done;
-        for(unsigned j=0;j<2;++j)if(!vc_buffer_put(&meta,(uint32_t)s->fit[k].weights[j],4))goto done;
+    vc_ng_model models[3];vc_ng_choice menu[3];unsigned nm=0,remap[MODELS];
+    for(unsigned k=0;k<MODELS;k++)remap[k]=255;
+    for(unsigned j=0;j<p->count;j++){
+        unsigned id=p->menu[j];menu[j]=(vc_ng_choice){s->predictor[id],255,j,{0,0}};
+        if(id>=12){unsigned k=id-12;
+            if(remap[k]==255){remap[k]=nm;models[nm++]=(vc_ng_model){s->fit[k].params,s->fit[k].param_size};}
+            menu[j].model=remap[k];memcpy(menu[j].weights,s->fit[k].weights,sizeof(menu[j].weights));
+        }
     }
-    if(first==MODELS&&!vc_buffer_append(&meta,s->empty,s->empty_size))goto done;
-    if(!vc_buffer_append(&meta,first==MODELS?s->empty:s->fit[first].params,
-        first==MODELS?s->empty_size:s->fit[first].param_size))goto done;
-    size_t cap=ZSTD_compressBound(meta.size);compressed=malloc(cap);if(!compressed)goto done;
-    size_t bytes=ZSTD_compress(compressed,cap,meta.data,meta.size,3);
-    if(!ZSTD_isError(bytes))cost=(double)bytes+12;
-done:
-    free(compressed);free(meta.data);return cost;
+    return vc_ng_model_cost(models,nm,menu,p->count);
 }
 
 static double estimate(const search *s,const plan *p)
@@ -307,7 +300,7 @@ int vc_ng_slow_encode(const uint8_t *src,unsigned d,unsigned preset,uint8_t *out
 {
     if(!src||!out||!written||preset>1||!ng_geometry_valid(d,d,d))return -1;
     ng_geometry old=ng_current_geometry;unsigned old_edge=ng_choice_edge;
-    int old_context=ng_fit_context_mode;ng_fit_context_mode=0;ng_choice_edge=4;
+    ng_choice_edge=4;
     ng_current_geometry=(ng_geometry){(int)d,(int)d,(int)d};
     search *s=calloc(1,sizeof(*s));vc_ng_occupancy zeros={0};plan plans[3];
     uint8_t *frame=NULL,*best=NULL;size_t size=0,best_size=0;int rc=-1;
@@ -346,5 +339,5 @@ done:
         for(unsigned k=0;k<CANDIDATES;++k){free(s->symbols[k]);free(s->classes[k]);}
         free(s->block);free(s->mask);free(s);}
     free(zeros.empty);free(zeros.mask);free(best);free(frame);
-    ng_current_geometry=old;ng_choice_edge=old_edge;ng_fit_context_mode=old_context;return rc;
+    ng_current_geometry=old;ng_choice_edge=old_edge;return rc;
 }

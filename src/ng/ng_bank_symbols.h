@@ -45,7 +45,7 @@ static int ng_bank_symbols_core(unsigned count,const uint8_t* const* params,cons
             const uint16_t weight=(uint16_t)feature_weights[z==0?1:0];
             for(int x=0;x<VCN_LC_D;x++){
                 unsigned m=row_choices[x];
-                unsigned feature=m>12?ng_directional_base(src,o+x,m-12,x,y,z,VCN_LC_D):0;
+                unsigned feature=m>12?ng_directional_base_xyz(src,o+x,m-12,x,y,z,VCN_LC_D,(size_t)VCN_LC_D*VCN_LC_Y):0;
                 q[x]=(uint16_t)(base[0][o+x]+bias[x]+weight*feature);
             }
             VCN_LC_SYMS(q,src+o,symbols+o,err);

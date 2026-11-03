@@ -42,11 +42,11 @@ def test_channels_contain_unwrapped_native_frames(layout,preset):
     a=np.random.default_rng(811).integers(0,256,(2,32,32,32),dtype=np.uint8)
     if layout=='last':a=np.ascontiguousarray(np.moveaxis(a,0,-1))
     c=Delta3D(predictor=preset,channel_axis=layout);f=c.encode(a)
-    assert f[:4]==b'NGC1'
+    assert f[:4]==b'NGC2'
     index=read_index(f[:indexed_header_size(f[:8])],len(f))
-    assert index.header_bytes==63 and len(index.leaves)==2
-    magic=b'NCF1'
-    assert all(f[l.offset:l.offset+4]==magic for l in index.leaves)
+    assert index.header_bytes==22 and len(index.leaves)==2
+    # Embedded payload begins with header length, not a repeated codec magic.
+    assert all(f[l.offset:l.offset+4]!=b'NCF1' for l in index.leaves)
     np.testing.assert_array_equal(np.frombuffer(c.decode(f),np.uint8).reshape(a.shape),a)
 
 def test_discarded_envelope_rejected():

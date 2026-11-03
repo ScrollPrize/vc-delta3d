@@ -10,7 +10,6 @@
 #include "residual_bridge.h"
 #include <stdlib.h>
 #include <string.h>
-#include <zstd.h>
 
 
 static int statistics(const uint8_t *symbols, const uint8_t *mask, size_t n,
@@ -45,22 +44,11 @@ static double uniform_cost(uint32_t counts[16][256], unsigned scale, size_t bloc
 
 static double metadata_cost(const vc_ng_fit *fit, const uint8_t *empty, size_t empty_size)
 {
-    size_t size = fit ? 2 * fit->param_size + 8 : 2 * empty_size;
-    uint8_t *data = malloc(size), *compressed = malloc(ZSTD_compressBound(size));
-    if (!data || !compressed) {free(data);free(compressed);return -1;}
-    if (fit) {
-        memcpy(data, fit->params, fit->param_size);
-        for (unsigned j = 0; j < 2; ++j)
-            for (unsigned b = 0; b < 4; ++b)
-                data[fit->param_size + 4 * j + b] = (uint8_t)((uint32_t)fit->weights[j] >> (8 * b));
-        memcpy(data + fit->param_size + 8, fit->params, fit->param_size);
-    } else {
-        memcpy(data, empty, empty_size);
-        memcpy(data + empty_size, empty, empty_size);
-    }
-    size_t bytes = ZSTD_compress(compressed, ZSTD_compressBound(size), data, size, 3);
-    free(data);free(compressed);
-    return ZSTD_isError(bytes) ? -1 : (double)bytes + 12.;
+    (void)empty;(void)empty_size;
+    vc_ng_model m={fit?fit->params:NULL,fit?fit->param_size:0};
+    vc_ng_choice c={1,fit?0:255,0,{0,0}};
+    if(fit)memcpy(c.weights,fit->weights,sizeof(c.weights));
+    return vc_ng_model_cost(&m,fit?1:0,&c,1);
 }
 
 int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, size_t *written)
