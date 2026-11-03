@@ -225,41 +225,28 @@ static void vcn_lc_cls_c(const uint8_t *e, size_t ri, const vcn_lc_par *p, uint1
 #endif
 /* the same for K <= 16: the class as the count of thresholds below the activity, the bias by byte shuffles */
 __attribute__((target("avx2"),always_inline)) static inline void vcn_lc_cls_avx2_impl(const uint8_t *e, size_t ri, const vcn_lc_par *p, uint16_t *restrict A,
-                                                            uint8_t *restrict kc,const vcn_lc_par* second,uint8_t*restrict kc2,int pairbytes,uint16_t*activity) {
-  const uint8_t *n = e + ri - VCN_LC_RP, *nn = e + ri - 2 * VCN_LC_RP, *u = e + ri - VCN_LC_SP, *uu = e + ri - 2 * VCN_LC_SP;
+                                                            uint8_t *restrict kc,uint16_t*activity) {
   __m256i th[VCN_LC_MAXK];
   const int nk = p->K - 1;
   for (int k = 0; k < nk; k++) th[k] = _mm256_set1_epi16((short)p->thr[k]);
-  __m256i th2[VCN_LC_MAXK];
-  if(second)for(int k=0;k<second->K-1;k++)th2[k]=_mm256_set1_epi16((short)second->thr[k]);
   uint8_t lo[16] = {0}, hi[16] = {0};
   for (int k = 0; k < p->K; k++) lo[k] = (uint8_t)p->cb[k], hi[k] = (uint8_t)((uint32_t)p->cb[k] >> 8);
   const __m256i tlo = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)lo)),
                 thi = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)hi));
-#define VCN_LC_L8(q) _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)(q)))
 #define VCN_LC_ACT(x) vcn_lc_activity16(e,ri+(x))
   int tmax = 0;
   for (int k = 0; k < nk; k++) tmax = p->thr[k] > tmax ? p->thr[k] : tmax;
-  if(pairbytes&&second)for(int k=0;k<second->K-1;k++)tmax=second->thr[k]>tmax?second->thr[k]:tmax;
-  if (tmax < 255 && (!second||pairbytes)) {
+  if (tmax < 255) {
     /* every threshold below 255: a > t equals min(a, 255) > t, so compare saturated bytes, 32 voxels at a
        time (unsigned order by the sign-bit flip). packus leaves the bytes in the order a[0..7], b[0..7],
        a[8..15], b[8..15]; the unpacks of the bias bytes undo it, the permute puts the classes in order */
     __m256i t8[VCN_LC_MAXK];
     const __m256i kx = _mm256_set1_epi8((char)0x80);
     for (int k = 0; k < nk; k++) t8[k] = _mm256_set1_epi8((char)(p->thr[k] ^ 0x80));
-    __m256i t82[VCN_LC_MAXK];
-    if(second)for(int k=0;k<second->K-1;k++)t82[k]=_mm256_set1_epi8((char)(second->thr[k]^0x80));
     for (int x = 0; x < VCN_LC_D; x += 32) {
       const __m256i a0=VCN_LC_ACT(x),a1=VCN_LC_ACT(x+16);
       if(activity){_mm256_storeu_si256((__m256i*)(activity+x),a0);_mm256_storeu_si256((__m256i*)(activity+x+16),a1);}
       const __m256i a8 = _mm256_xor_si256(_mm256_packus_epi16(a0,a1), kx);
-      if(second){
-        __m256i s0=_mm256_setzero_si256(),s1=s0;int k=0;
-        for(;k+1<second->K-1;k+=2){s0=_mm256_sub_epi8(s0,_mm256_cmpgt_epi8(a8,t82[k]));s1=_mm256_sub_epi8(s1,_mm256_cmpgt_epi8(a8,t82[k+1]));}
-        if(k<second->K-1)s0=_mm256_sub_epi8(s0,_mm256_cmpgt_epi8(a8,t82[k]));
-        _mm256_storeu_si256((__m256i*)(kc2+x),_mm256_permute4x64_epi64(_mm256_add_epi8(s0,s1),0xD8));
-      }
       __m256i c0 = _mm256_setzero_si256(), c1 = c0;
       int k = 0;
       for (; k + 1 < nk; k += 2)
@@ -277,13 +264,6 @@ __attribute__((target("avx2"),always_inline)) static inline void vcn_lc_cls_avx2
   for (int x = 0; x < VCN_LC_D; x += 16) {
     const __m256i a = VCN_LC_ACT(x);
     if(activity)_mm256_storeu_si256((__m256i*)(activity+x),a);
-    if(second){
-      __m256i s0=_mm256_setzero_si256(),s1=s0;int k=0;
-      for(;k+1<second->K-1;k+=2){s0=_mm256_sub_epi16(s0,_mm256_cmpgt_epi16(a,th2[k]));s1=_mm256_sub_epi16(s1,_mm256_cmpgt_epi16(a,th2[k+1]));}
-      if(k<second->K-1)s0=_mm256_sub_epi16(s0,_mm256_cmpgt_epi16(a,th2[k]));
-      __m256i c=_mm256_add_epi16(s0,s1);
-      _mm_storeu_si128((__m128i*)(kc2+x),_mm_packus_epi16(_mm256_castsi256_si128(c),_mm256_extracti128_si256(c,1)));
-    }
     __m256i c0 = _mm256_setzero_si256(), c1 = c0;
     int k = 0;
     for (; k + 1 < nk; k += 2)
@@ -297,17 +277,12 @@ __attribute__((target("avx2"),always_inline)) static inline void vcn_lc_cls_avx2
     _mm_storeu_si128((__m128i *)(kc + x), c8);
   }
 #undef VCN_LC_ACT
-#undef VCN_LC_L8
 }
 __attribute__((target("avx2"))) static void vcn_lc_cls_avx2(const uint8_t *e,size_t ri,const vcn_lc_par*p,uint16_t*restrict A,uint8_t*restrict kc){
-  vcn_lc_cls_avx2_impl(e,ri,p,A,kc,NULL,NULL,0,NULL);
+  vcn_lc_cls_avx2_impl(e,ri,p,A,kc,NULL);
 }
 __attribute__((target("avx2"))) static void ng_cls_export_avx2(const uint8_t*e,size_t ri,const vcn_lc_par*p,uint16_t*A,uint8_t*kc,uint16_t*activity){
-  vcn_lc_cls_avx2_impl(e,ri,p,A,kc,NULL,NULL,0,activity);
-}
-__attribute__((target("avx2"))) static void vcn_lc_cls_avx2_pair(const uint8_t *e,size_t ri,const vcn_lc_par*p,uint16_t*restrict A,uint8_t*restrict kc,const vcn_lc_par*second,uint8_t*restrict kc2,int pairbytes){
-  if(pairbytes)vcn_lc_cls_avx2_impl(e,ri,p,A,kc,second,kc2,1,NULL);
-  else vcn_lc_cls_avx2_impl(e,ri,p,A,kc,second,kc2,0,NULL);
+  vcn_lc_cls_avx2_impl(e,ri,p,A,kc,activity);
 }
 #define VCN_LC_CLS(e, ri, p, A, kc) ((vcn_use_avx2() && (p)->K <= 16) ? vcn_lc_cls_avx2(e, ri, p, A, kc) : vcn_lc_cls_c(e, ri, p, A, kc))
 #elif VCN_HAVE_NEON
@@ -504,11 +479,11 @@ static void vcn_lc_pre_neon(const uint8_t *row,const vcn_lc_plist *pl,uint16_t b
 #endif
 /* Only omit full SIMD spans with no NG-selected voxels. Classes still use
    every residual and the causal schedule/padding are unchanged. */
-static void vcn_lc_pre_selected(const uint8_t *row,const vcn_lc_plist *pl,uint16_t bias,uint16_t *pre,unsigned needed,int scalar) {
+static void vcn_lc_pre_selected(const uint8_t *row,const vcn_lc_plist *pl,uint16_t bias,uint16_t *pre,unsigned needed) {
 #if VCN_HAVE_AVX2
-  if(!scalar && vcn_use_avx2()){vcn_lc_pre_avx2_impl(row,pl,bias,pre,needed);return;}
+  if(vcn_use_avx2()){vcn_lc_pre_avx2_impl(row,pl,bias,pre,needed);return;}
 #elif VCN_HAVE_NEON
-  if(!scalar){vcn_lc_pre_neon_impl(row,pl,bias,pre,needed);return;}
+  vcn_lc_pre_neon_impl(row,pl,bias,pre,needed);return;
 #endif
   vcn_lc_pre_c_impl(row,pl,bias,pre,needed);
 }

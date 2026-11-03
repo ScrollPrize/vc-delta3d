@@ -252,12 +252,19 @@ static int ransEncodeFrequencies(const uint8_t *in,size_t n,size_t headerReserve
 int vc_rans_decode(const uint8_t *table, size_t frameSize, uint8_t *out, size_t n)
 {
     if (!table || (!out && n) || frameSize < kRansTableBytes + kRansStateBytes) return 0;
-    uint32_t freq[256];
+    uint16_t freq[256];
+    for (int s = 0; s < 256; ++s)
+        freq[s] = (uint16_t)(table[2*s] | (unsigned)table[2*s+1] << 8);
+    return vc_rans_decode_frequencies(freq, table+kRansTableBytes,
+                                     frameSize-kRansTableBytes, out, n);
+}
+int vc_rans_decode_frequencies(const uint16_t freq[256], const uint8_t *payload,
+                              size_t size, uint8_t *out, size_t n)
+{
+    if (!freq || !payload || (!out && n) || size < kRansStateBytes) return 0;
     uint32_t cum[256];
     uint32_t total = 0;
     for (int s = 0; s < 256; ++s) {
-        freq[s] = (uint32_t)(table[2 * s]) |
-                  ((uint32_t)(table[2 * s + 1]) << 8);
         cum[s] = total;
         total += freq[s];
     }
@@ -269,10 +276,10 @@ int vc_rans_decode(const uint8_t *table, size_t frameSize, uint8_t *out, size_t 
     for (int s = 0; s < 256; ++s)
         for (uint32_t j = 0; j < freq[s]; ++j)
             slotEntry[cum[s] + j] =
-                ((freq[s] - 1) << 20) | (j << 8) | (uint32_t)(s);
+                (((uint32_t)freq[s] - 1) << 20) | (j << 8) | (uint32_t)(s);
 
-    const uint8_t *p = table + kRansTableBytes;
-    const uint8_t *end = table + frameSize;
+    const uint8_t *p = payload;
+    const uint8_t *end = payload + size;
     uint64_t x[kRansLanes];
     for (size_t k = 0; k < kRansLanes; ++k) {
         memcpy(&x[k], p, 8);

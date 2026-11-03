@@ -209,14 +209,6 @@ static inline void vcn_lc_tr16_neon(const uint8_t *src, size_t sp, uint8x16_t *o
   for (int q = 0; q < 8; q++)
     o[q] = vcombine_u8(vget_low_u8(a[q]), vget_low_u8(a[8 + q])), o[q + 8] = vcombine_u8(vget_high_u8(a[q]), vget_high_u8(a[8 + q]));
 }
-static void vcn_lc_tr_y_neon(int nl, const uint8_t (*restrict R)[VCN_LC_D], uint8_t (*restrict T)[VCN_LC_NL]) {
-  uint8x16_t o[16];
-  for (int j0 = 0; j0 < nl; j0 += 16)
-    for (int x0 = 0; x0 < VCN_LC_D; x0 += 16) {
-      vcn_lc_tr16_neon(R[j0] + x0, VCN_LC_D, o);
-      for (int c = 0; c < 16; c++) vst1q_u8(T[x0 + c] + j0, o[c]);
-    }
-}
 /* lanes back to the rows of b */
 static void vcn_lc_tr_v_neon(int nl, const uint8_t (*restrict T)[VCN_LC_NL], uint8_t *const *rows) {
   uint8x16_t o[16];

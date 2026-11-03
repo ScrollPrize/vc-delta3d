@@ -25,6 +25,13 @@ int main(void)
             for (unsigned i = 0; i < 16; ++i) assert(frame[i] == 0);
             assert(vc_rans_decode(frame + 16, length - 16, out, n));
             assert(memcmp(src, out, n) == 0);
+            uint16_t table[256];
+            for(unsigned s=0;s<256;s++)table[s]=frame[16+2*s]|(unsigned)frame[17+2*s]<<8;
+            assert(vc_rans_decode_frequencies(table,frame+528,length-528,out,n));
+            assert(!memcmp(src,out,n));
+            assert(!vc_rans_decode_frequencies(table,frame+528,length-529,out,n));
+            table[0]^=1;
+            assert(!vc_rans_decode_frequencies(table,frame+528,length-528,out,n));
             uint32_t freq[256];uint8_t *fixed=NULL;size_t fixed_len=0;
             for(unsigned s=0;s<256;s++)freq[s]=frame[16+2*s]|(unsigned)frame[17+2*s]<<8;
             assert(vc_rans_encode_frequencies(src,n,16,freq,&fixed,&fixed_len));
@@ -42,6 +49,8 @@ int main(void)
     assert(!vc_rans_encode(NULL, 1, 0, &frame, &length));
     assert(!vc_rans_encode((const uint8_t*)"x", SIZE_MAX, 0, &frame, &length));
     uint32_t bad[256]={0};
+    uint16_t empty[256]={0};
+    assert(!vc_rans_decode_frequencies(empty,NULL,0,NULL,0));
     assert(!vc_rans_encode_frequencies((const uint8_t*)"x",1,0,bad,&frame,&length));
     bad[0]=4096;
     assert(!vc_rans_encode_frequencies((const uint8_t*)"x",1,0,bad,&frame,&length));

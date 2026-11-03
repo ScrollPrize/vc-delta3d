@@ -12,7 +12,9 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
 #endif
 ){
     const unsigned selector_edge=ng_choice_edge;
+#ifdef NG_RPACKED
     const unsigned selector_shift=selector_edge==2?1:selector_edge==4?2:selector_edge==8?3:selector_edge==16?4:5;
+#endif
     const NG_RV one=NG_RSET(1),two=NG_RSET(2),four=NG_RSET(4),bytes=NG_RSET(255);
     const int span=8;
     for(int start=0;start<width;start+=span)for(int h=0;h<NG_RHALVES;h++){

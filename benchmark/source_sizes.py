@@ -22,7 +22,7 @@ add("Decoder core", """
 ng_bank_reconstruct.h ng_causal_state.h ng_kernel_decode.h ng_native_decode.c
 ng_entropy_vector.h ng_recur_vector.h
 ng_recur_wide.h ng_recur_wide_ops.h ng_recur_undef.h ng_gather.h
-ng_wave_column.h ng_entropy_permutation.h ng_activity_bias.h
+ng_wave_column.h ng_entropy_permutation.h
 ng_entropy_step.inc ng_recur_math.inc
 """)
 add("Mixed/shared core", """

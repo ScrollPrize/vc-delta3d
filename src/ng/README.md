@@ -30,6 +30,8 @@ versions. Only old Delta3D compatibility/fallback is retained. See
 There is no streaming state, adaptive partition search, tree entropy coder,
 LPC, tooslow, alternative fitting/refinement or user-selectable decoder trial.
 Fixed-geometry instantiations share the SAME C kernels rather than copies.
+The completed cleanup and validation are recorded in
+[`experiments/final_cleanup.md`](../../experiments/final_cleanup.md).
 
 ## Source map
 

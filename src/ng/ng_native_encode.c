@@ -3,14 +3,14 @@
 /* Retained encoder entrypoints; shared arithmetic, no duplicate kernels. */
 #define NG_DECLARE_FIXED(d) \
 int ng_fixed##d##_encode_ex(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*); \
-int ng_fixed##d##_activity_values(const uint8_t*,uint16_t*,int,uint32_t*);
+int ng_fixed##d##_activity_values(const uint8_t*,uint16_t*,uint32_t*);
 NG_DECLARE_FIXED(32)
 NG_DECLARE_FIXED(64)
 NG_DECLARE_FIXED(128)
 NG_DECLARE_FIXED(256)
 typedef struct {
     int (*encode)(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*);
-    int (*activity_values)(const uint8_t*,uint16_t*,int,uint32_t*);
+    int (*activity_values)(const uint8_t*,uint16_t*,uint32_t*);
 } ng_fixed_kernels;
 #define NG_FIXED_ENTRY(d) {ng_fixed##d##_encode_ex,ng_fixed##d##_activity_values}
 static const ng_fixed_kernels ng_fixed_sets[]={NG_FIXED_ENTRY(64),NG_FIXED_ENTRY(128),NG_FIXED_ENTRY(256),NG_FIXED_ENTRY(32)};
@@ -50,9 +50,7 @@ int ng_feature_prepare_activity(const uint8_t*src,const int*config,const uint8_t
     return ng_encode_core(src,&cf,params,cap,n,sy,NULL);
 }
 
-void* ng_fit_session_create(int simd){
-    ng_fit_session*s=calloc(1,sizeof(*s));if(s)s->simd=simd!=0;return s;
-}
+void* ng_fit_session_create(void){return calloc(1,sizeof(ng_fit_session));}
 void ng_fit_session_destroy(void*ptr){
     ng_fit_session*s=ptr;if(!s)return;
     for(int i=0;i<2;i++)ng_fit_bank_clear(s->banks+i);
@@ -81,7 +79,7 @@ double ng_hist_cost_logs(const uint32_t* counts,int tb,const double* logs) {
 }
 double ng_hist_cost(const uint32_t* counts,int tb) {return ng_hist_cost_logs(counts,tb,NULL);}
 
-static int ng_compact_encode_order(const uint8_t* params,size_t n,const uint8_t* sy,const uint8_t* cl,
+int ng_wave_encode(const uint8_t* params,size_t n,const uint8_t* sy,const uint8_t* cl,
     uint8_t* out,size_t cap,size_t* size) {
     const uint8_t* cursor=params;vcn_lc_par* p=NULL;
     if(vcn_lc_readpar(&cursor,n,&p)!=VCN_OK)return -1;
@@ -91,20 +89,17 @@ static int ng_compact_encode_order(const uint8_t* params,size_t n,const uint8_t*
     int rc=ng_encode_core(NULL,&cf,out,cap,size,NULL,NULL);free(p);return rc;
 }
 
-int ng_wave_encode(const uint8_t* p,size_t n,const uint8_t* sy,const uint8_t* cl,uint8_t* out,size_t cap,size_t* size) {
-    return ng_compact_encode_order(p,n,sy,cl,out,cap,size);
-}
 
 /* Encoder already knows source samples and fitted NG tap predictions. Only
    activity depends on previous symbols; reuse original SIMD class/symbol math. */
-static int ng_selected_symbols_impl(const uint8_t* params,size_t n,const uint8_t* selectors,const uint8_t* src,
-    const uint16_t* base,const uint8_t* const* delta,uint8_t* sy,uint8_t* cl,int B) {
+int ng_block_symbols(const uint8_t* params,size_t n,const uint8_t* selectors,const uint8_t* src,
+    const uint16_t* base,const uint8_t* const* delta,uint8_t* sy,uint8_t* cl) {
     const uint8_t* cursor=params;vcn_lc_par* p=NULL;
     if(vcn_lc_readpar(&cursor,n,&p)!=VCN_OK)return -1;
     if(cursor!=params+n){free(p);return -1;}
     uint8_t* e=calloc(VCN_LC_NB,1);if(!e){free(p);return -1;}
     uint16_t Q[VCN_LC_D];
-    int block_shift=B==4?2:B==8?3:4,nb=VCN_LC_D>>block_shift,ny=VCN_LC_Y>>block_shift;
+    const int block_shift=2,nb=VCN_LC_D>>2,ny=VCN_LC_Y>>2;
     for(int z=0;z<VCN_LC_Z;z++)for(int y=0;y<VCN_LC_Y;y++) {
         size_t ri=VCN_LC_IDX(z,y,0),o=((size_t)z*VCN_LC_Y+y)*VCN_LC_D;
         vcn_lc_row_begin(e,z,y,0);
@@ -123,44 +118,35 @@ static int ng_selected_symbols_impl(const uint8_t* params,size_t n,const uint8_t
 /* Multiple independently fitted models, all driven by the same actual selected
  * residual history. Fixed candidates precede the model candidates. Reuses the
  * native class and symbol kernels, including fractional Q8 sign mapping. */
-_Thread_local int ng_bank_selected_only=0;
 #include "ng_bank_symbols.h"
 #define NG_BANK_ARGS unsigned c,const uint8_t*const*p,const size_t*n,const uint16_t*const*b,const uint8_t*s,const uint8_t*x,uint8_t*const*v,uint8_t*y,uint16_t*a
-int ng_fixed32_bank_symbols(NG_BANK_ARGS);
-int ng_fixed64_bank_symbols(NG_BANK_ARGS);
-int ng_fixed128_bank_symbols(NG_BANK_ARGS);
-int ng_fixed256_bank_symbols(NG_BANK_ARGS);
-int ng_bank_symbols(NG_BANK_ARGS){
+int ng_fixed32_bank_symbols(NG_BANK_ARGS,int);
+int ng_fixed64_bank_symbols(NG_BANK_ARGS,int);
+int ng_fixed128_bank_symbols(NG_BANK_ARGS,int);
+int ng_fixed256_bank_symbols(NG_BANK_ARGS,int);
+static int ng_bank_dispatch(NG_BANK_ARGS,int selected){
     if(NG_X==NG_Y&&NG_X==NG_Z){
-        if(NG_X==32)return ng_fixed32_bank_symbols(c,p,n,b,s,x,v,y,a);
-        if(NG_X==64)return ng_fixed64_bank_symbols(c,p,n,b,s,x,v,y,a);
-        if(NG_X==128)return ng_fixed128_bank_symbols(c,p,n,b,s,x,v,y,a);
-        if(NG_X==256)return ng_fixed256_bank_symbols(c,p,n,b,s,x,v,y,a);
+        if(NG_X==32)return ng_fixed32_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
+        if(NG_X==64)return ng_fixed64_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
+        if(NG_X==128)return ng_fixed128_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
+        if(NG_X==256)return ng_fixed256_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
     }
-    return ng_bank_symbols_impl(c,p,n,b,s,x,v,y,a);
+    return ng_bank_symbols_impl(c,p,n,b,s,x,v,y,a,selected);
 }
-int ng_bank_selected_symbols(NG_BANK_ARGS){
-    int previous=ng_bank_selected_only;ng_bank_selected_only=1;
-    int result=ng_bank_symbols(c,p,n,b,s,x,v,y,a);
-    ng_bank_selected_only=previous;return result;
-}
+int ng_bank_symbols(NG_BANK_ARGS){return ng_bank_dispatch(c,p,n,b,s,x,v,y,a,0);}
+int ng_bank_selected_symbols(NG_BANK_ARGS){return ng_bank_dispatch(c,p,n,b,s,x,v,y,a,1);}
 #undef NG_BANK_ARGS
-int ng_block_symbols(const uint8_t* p,size_t n,const uint8_t* s,const uint8_t* src,
-    const uint16_t* base,const uint8_t* const* delta,uint8_t* sy,uint8_t* cl,int B) {
-    if(B!=4 && B!=8 && B!=16)return -1;
-    return ng_selected_symbols_impl(p,n,s,src,base,delta,sy,cl,B);
-}
 
 /* Contexts for an already-filtered byte stream: same causal activity stencil
    as NG, but quantiles fitted on this stream rather than the pre-filter one. */
 #include "ng_activity_values.h"
-static int ng_activity_dispatch(const uint8_t*s,uint16_t*a,int symbols,uint32_t*h){
+static int ng_activity_dispatch(const uint8_t*s,uint16_t*a,uint32_t*h){
     const ng_fixed_kernels*f=ng_fixed_current();
-    return f?f->activity_values(s,a,symbols,h):ng_activity_values_impl(s,a,symbols,h);
+    return f?f->activity_values(s,a,h):ng_activity_values_impl(s,a,h);
 }
 
-int ng_activity_symbol_values(const uint8_t* symbols,uint16_t* activity) {return ng_activity_dispatch(symbols,activity,1,NULL);}
+int ng_activity_symbol_values(const uint8_t* symbols,uint16_t* activity) {return ng_activity_dispatch(symbols,activity,NULL);}
 int ng_activity_symbol_histogram(const uint8_t* symbols,uint16_t* activity,uint32_t* histogram) {
     if(!symbols||!activity||!histogram)return -1;
-    return ng_activity_dispatch(symbols,activity,1,histogram);
+    return ng_activity_dispatch(symbols,activity,histogram);
 }

@@ -30,7 +30,6 @@ attr static void name(int width,const ng_bank_wave_column* NG_WRESTRICT a,uint16
 NG_BANK_WAVE_KERNEL(ng_bank_wave_c,)
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
 NG_BANK_WAVE_KERNEL(ng_bank_wave_avx2,__attribute__((target("avx2"))))
-NG_BANK_WAVE_KERNEL(ng_bank_wave_avx512,__attribute__((target("avx512f,avx512bw"))))
 #endif
 #undef NG_BANK_WAVE_KERNEL
 #undef NG_WRESTRICT

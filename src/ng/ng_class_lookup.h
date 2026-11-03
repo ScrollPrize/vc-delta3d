@@ -1,12 +1,11 @@
 /* Shared exact activity -> predictor bias / entropy class lookup. */
 #if VCN_HAVE_AVX2
-__attribute__((target("avx2"),always_inline)) static inline void ng_bank_class_lookup_impl(const uint8_t*e,size_t ri,const uint32_t*table,uint16_t*restrict pre,uint8_t*restrict entropy_class,int fused){
-    uint16_t activity[VCN_LC_D];if(!fused)vcn_lc_apre(e,ri,activity);
+__attribute__((target("avx2"))) static void ng_bank_class_lookup(const uint8_t*e,size_t ri,const uint32_t*table,uint16_t*restrict pre,uint8_t*restrict entropy_class){
     const __m256i mask=_mm256_set1_epi32(65535);
     __m256i act=_mm256_setzero_si256();
     for(int x=0;x<VCN_LC_D;x+=8){
-        if(fused&&!(x&15))act=vcn_lc_activity16(e,ri+x);
-        __m128i a=fused?((x&8)?_mm256_extracti128_si256(act,1):_mm256_castsi256_si128(act)):_mm_loadu_si128((const __m128i*)(activity+x));
+        if(!(x&15))act=vcn_lc_activity16(e,ri+x);
+        __m128i a=(x&8)?_mm256_extracti128_si256(act,1):_mm256_castsi256_si128(act);
         __m256i ix=_mm256_cvtepu16_epi32(a);
         __m256i values=_mm256_i32gather_epi32((const int*)table,ix,4);
         __m256i bias=_mm256_and_si256(values,mask);
@@ -16,10 +15,6 @@ __attribute__((target("avx2"),always_inline)) static inline void ng_bank_class_l
         __m128i c=_mm_packus_epi32(_mm256_castsi256_si128(cls),_mm256_extracti128_si256(cls,1));
         _mm_storel_epi64((__m128i*)(entropy_class+x),_mm_packus_epi16(c,c));
     }
-}
-__attribute__((target("avx2"))) static void ng_bank_class_lookup(const uint8_t*e,size_t ri,const uint32_t*table,uint16_t*pre,uint8_t*entropy_class,int fused){
-    if(fused)ng_bank_class_lookup_impl(e,ri,table,pre,entropy_class,1);
-    else ng_bank_class_lookup_impl(e,ri,table,pre,entropy_class,0);
 }
 #ifdef NG_HAVE_WIDE_PRE
 __attribute__((target("avx512f,avx512bw"),always_inline)) static inline __m512i ng_bank_class_wide32(const uint8_t*e,size_t ri,const uint32_t*table,__m512i pre,uint8_t*cls){

@@ -17,13 +17,12 @@ extern thread_local NG_TLS_CONSTINIT int ng_disable_avx512;
 extern _Thread_local unsigned ng_choice_edge;
 extern _Thread_local int ng_disable_avx512;
 #endif
-void* ng_fit_session_create(int);
+void* ng_fit_session_create(void);
 void ng_fit_session_destroy(void*);
 int ng_feature_prepare_cached(void*,const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
 int ng_bank_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t* const*,const uint8_t*,const uint8_t*,uint8_t* const*,uint8_t*,uint16_t*);
 int ng_bank_selected_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t* const*,const uint8_t*,const uint8_t*,uint8_t* const*,uint8_t*,uint16_t*);
-void* ng_causal_create(const uint8_t* params,size_t n);
-void* ng_causal_create_model(const uint8_t* params,size_t n);
+void* ng_causal_create(const uint8_t* params,size_t n,int history);
 void ng_causal_destroy(void* state);
 /* config: r0,r1,r2,classes,tap budget,fit stride. Validated before use. */
 int ng_plain_prepare_masked(const uint8_t*,const int*,const uint8_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
@@ -46,7 +45,7 @@ int ng_bank_empty_model(uint8_t*,size_t,size_t*);
 size_t ng_write_freq_table(uint8_t*,const uint16_t*);
 int ng_read_freq_table(const uint8_t*,size_t,uint16_t*,size_t*);
 int ng_read_freq_table_scaled(const uint8_t*,size_t,uint16_t*,unsigned,size_t*);
-int ng_block_symbols(const uint8_t*,size_t,const uint8_t*,const uint8_t*,const uint16_t*,const uint8_t* const*,uint8_t*,uint8_t*,int);
+int ng_block_symbols(const uint8_t*,size_t,const uint8_t*,const uint8_t*,const uint16_t*,const uint8_t* const*,uint8_t*,uint8_t*);
 double ng_hist_cost_logs(const uint32_t*,int,const double*);
 int ng_set_isa_limit(int); /* 0 automatic, 256 excludes AVX-512, per thread */
 int ng_activity_symbol_values(const uint8_t*,uint16_t*);
@@ -68,9 +67,6 @@ static inline uint8_t delta_predict_xyz(const uint8_t* v,size_t i,unsigned mask,
     default:return (uint8_t)(v[i-1]+v[i-row]+v[i-plane]-v[i-row-1]-v[i-plane-1]-v[i-plane-row]+v[i-plane-row-1]);
     }
 }
-static inline uint8_t delta_predict_at(const uint8_t* v,size_t i,unsigned mask) {
-    return delta_predict_xyz(v,i,mask,(unsigned)(i%NG_X),(unsigned)((i/NG_X)%NG_Y),(unsigned)(i/((size_t)NG_X*NG_Y)),NG_X,(size_t)NG_X*NG_Y);
-}
 /* Shared exact directional bases. Clamping is before modulo conversion, not
  * clamping the wrapped byte. Missing selected axes retain the legacy fallback. */
 typedef struct {int constant,left,clamp,lo,hi;} ng_base_parts;
@@ -87,9 +83,6 @@ static inline ng_base_parts ng_directional_parts_xyz(const uint8_t*s,size_t i,un
     if((mask&6)==6)p-=s[i-plane-d];
     if(mask==7)p+=s[i-plane-d-1];
     ng_base_parts r={p,(mask&1)!=0,clamp,lo,hi};return r;
-}
-static inline ng_base_parts ng_directional_parts(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d){
-    return ng_directional_parts_xyz(s,i,m,x,y,z,d,(size_t)d*d);
 }
 static inline uint8_t ng_directional_base_xyz(const uint8_t*s,size_t i,unsigned m,unsigned x,unsigned y,unsigned z,unsigned d,size_t plane){
     ng_base_parts r=ng_directional_parts_xyz(s,i,m,x,y,z,d,plane);int a=r.left?s[i-1]:0,p=r.constant+a;

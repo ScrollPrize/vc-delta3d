@@ -10,10 +10,10 @@
 #include "residual_bridge.h"
 #include "ng_kernels.h"
 #include "ng_activity_values.h"
-int NG_FIXED_NAME(_activity_values)(const uint8_t*s,uint16_t*a,int symbols,uint32_t*h){return ng_activity_values_impl(s,a,symbols,h);}
+int NG_FIXED_NAME(_activity_values)(const uint8_t*s,uint16_t*a,uint32_t*h){return ng_activity_values_impl(s,a,h);}
 #include "ng_bank_symbols.h"
-int NG_FIXED_NAME(_bank_symbols)(unsigned c,const uint8_t*const*p,const size_t*n,const uint16_t*const*b,const uint8_t*s,const uint8_t*x,uint8_t*const*v,uint8_t*y,uint16_t*a){
-    return ng_bank_symbols_impl(c,p,n,b,s,x,v,y,a);
+int NG_FIXED_NAME(_bank_symbols)(unsigned c,const uint8_t*const*p,const size_t*n,const uint16_t*const*b,const uint8_t*s,const uint8_t*x,uint8_t*const*v,uint8_t*y,uint16_t*a,int selected){
+    return ng_bank_symbols_impl(c,p,n,b,s,x,v,y,a,selected);
 }
 #include "ng_causal_state.h"
 #include "ng_bank_reconstruct.h"

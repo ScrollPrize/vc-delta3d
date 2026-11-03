@@ -124,7 +124,7 @@ static int screen(search *s,const uint8_t *src,unsigned d,const vc_ng_occupancy 
     for(unsigned m=0;m<12;++m)if(m!=top[0]&&m!=top[1])top[top_count++]=m;
     top[top_count++]=0;
     int cfg[6];memcpy(cfg,config,sizeof(cfg));if(d>32)cfg[5]=4;
-    session=ng_fit_session_create(1);if(!session)goto done;
+    session=ng_fit_session_create();if(!session)goto done;
     for(unsigned k=0;k<MODELS;++k){
         s->predictor[12+k]=top[k];
         if(!vc_ng_fit_input(&s->fit[k],proxy,cfg,k==12?NULL:fixed[top[k]],occupancy.mask,

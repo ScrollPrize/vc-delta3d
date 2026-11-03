@@ -112,7 +112,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     for (unsigned m = 0; m < 12; ++m)
         if (m != top[0] && screening[m] < screening[top[1]]) top[1] = m;
     int cfg[6] = {3,3,1,16,40,d>32?4:128};
-    session = ng_fit_session_create(1);
+    session = ng_fit_session_create();
     if (!session) goto done;
     for (unsigned k = 0; k < 2; ++k)
         if (!vc_ng_fit_input(&fits[k],sample,cfg,candidate[top[k]],screen.mask,

@@ -56,7 +56,7 @@ int vc_ng_rect_encode(const uint8_t *src,unsigned x,unsigned y,unsigned z,
     for(size_t b=0;b<blocks;++b)for(unsigned m=1;m<8;++m)
         if(scores[8*b+m]<scores[8*b+choices[b]])choices[b]=(uint8_t)m;
     const uint8_t *delta_ptr[8];for(unsigned m=0;m<8;++m)delta_ptr[m]=delta[m];
-    if(ng_block_symbols(params,pn,choices,src,base,delta_ptr,symbols,classes,4))goto done;
+    if(ng_block_symbols(params,pn,choices,src,base,delta_ptr,symbols,classes))goto done;
     vc_ng_model model={params,pn};vc_ng_choice menu[8];uint16_t thresholds[15];
     for(unsigned m=0;m<8;m++)menu[m]=(vc_ng_choice){m,m?255:0,0,{0,0}};
     for(unsigned j=0;j<15;j++){size_t at=pn-62+2*j;thresholds[j]=(uint16_t)(params[at]|(unsigned)params[at+1]<<8);}

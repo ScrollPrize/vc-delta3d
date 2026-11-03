@@ -532,3 +532,29 @@ byte-identical. Combined decode MiB/s: fast 589.5 -> 627.5, medium 430.2 ->
 CTest, 136 Python tests, C++ smoke and 684 generic-format cases passed.
 No commit requested. Menu-to-kernel descriptor redesign remains a separate
 next step.
+
+## Final retained-path audit
+
+Checkpoint committed as 22e2583. Continue all remaining cleanup before handoff:
+remove replicated model pointers/menu scans, audit residual experimental/dead
+branches and allocation state, consolidate shared helpers without adding hot
+loop dispatch. Keep the full frame grammar and all SIMD/portable capabilities.
+Validate generic-format tests, sanitizers, portable builds and complete corpus
+byte parity; measure native throughput before accepting hot-path changes.
+
+Implemented menu/state simplification, remaining unused encoder/kernel removal,
+explicit encoder selection state, shared rANS payload decoding. Initial timing
+exposed a 5–9% decode regression. Isolated with alternating C-API timings:
+restoring palette expansion, model buffers, frame allocations or old header
+copying did not fix it. Restoring entropy phase guards (without restoring the
+unused residual-only fallback) recovered CT-L0 to within 1.2% of baseline.
+Retain these guards as measured compiler-sensitive loop structure, not a codec
+option. Final verification completed: Release/sanitizer/portable CTest 7/7 each,
+136 Python tests, C++ adapter smoke, and all 576 latest-build corpus frames
+lossless and byte-identical. Final paired native decode is within 0.7–1.4% of
+the checkpoint; encoding throughput is unchanged within measurement variation.
+Production source: 7,759 lines in 82 files; decoder core: 1,267 lines.
+All identified cleanup items are complete. Remaining specialized paths serve
+the supported format or real ISA/model combinations; historical experiment
+reports are documentation only. See experiments/final_cleanup.md and
+final_cleanup_20261103/paired_final_no_scalar.jsonl for results and commands.

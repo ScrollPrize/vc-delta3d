@@ -108,11 +108,11 @@ static int64_t ng_fit_dot_neon(const int16_t*a,const int16_t*b,size_t n){
   }return total;
 }
 #endif
-static int64_t ng_fit_dot(const int16_t*a,const int16_t*b,size_t n,int simd){
+static int64_t ng_fit_dot(const int16_t*a,const int16_t*b,size_t n){
 #if VCN_HAVE_AVX2
-  if(simd&&vcn_use_avx2())return ng_fit_dot_avx2(a,b,n);
+  if(vcn_use_avx2())return ng_fit_dot_avx2(a,b,n);
 #elif VCN_HAVE_NEON
-  if(simd)return ng_fit_dot_neon(a,b,n);
+  return ng_fit_dot_neon(a,b,n);
 #endif
   return ng_fit_dot_c(a,b,n);
 }
@@ -295,7 +295,7 @@ static int vcn_lc_fit(const uint8_t *b, const vcn_lc_taps *t, int zlo, int zhi, 
     memset(column+cache->count,0,(cache->stored-cache->count)*sizeof(int16_t));
     for(int k=0;k<ncol;k++){
       int a=k>nt-1?k:nt-1,c=k<nt-1?k:nt-1;
-      G[(size_t)a*ncp+c]=ng_fit_dot(column,cache->columns+(size_t)k*cache->capacity,cache->stored,session->simd);
+      G[(size_t)a*ncp+c]=ng_fit_dot(column,cache->columns+(size_t)k*cache->capacity,cache->stored);
     }
   }else{
   for (int z = zlo; z < zhi; z++)

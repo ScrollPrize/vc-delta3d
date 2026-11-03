@@ -26,6 +26,8 @@ menus and selector block sizes independently of what today's presets emit.
 The more invasive menu-descriptor rewrite is intentionally a separate next
 step: it must preserve generic menus and the now-measured SIMD paths, not merely
 reduce source lines by putting dynamic dispatch in the inner loop.
+That follow-up is now completed in `final_cleanup.md`: simplify construction
+and ownership while retaining compact numeric selectors inside SIMD kernels.
 
 ## Line counts
 

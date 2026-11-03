@@ -15,7 +15,7 @@ typedef struct {
 typedef struct {
     ng_fit_bank_cache banks[2];
     uint8_t* padded;
-    int padded_ready,simd;
+    int padded_ready;
     const uint8_t* source;
     int config[6],dims[3];
 } ng_fit_session;
