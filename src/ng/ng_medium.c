@@ -59,7 +59,7 @@ static int select_blocks(medium_state *s)
 static int thresholds(medium_state *s,unsigned groups,unsigned tune,uint16_t out[15])
 {
     return vc_ng_search_thresholds(s->symbols,s->activity,s->n,s->zero.mask,s->block,
-        s->choices,s->blocks,groups,tune,out);
+        s->choices,s->blocks,groups,tune,NULL,out);
 }
 
 static int refresh(medium_state *s)
@@ -97,9 +97,7 @@ static int screen(medium_state *s,unsigned *singleton)
             !vc_ng_distribution_fit(&stats,fixed[m],activity,n,zeros.mask,0))goto done;
         rank[m]=vc_ng_distribution_score(&stats);
     }
-    for(unsigned m=1;m<12;++m)if(rank[m]<rank[top[0]])top[0]=m;
-    top[1]=top[0]?0:1;
-    for(unsigned m=0;m<12;++m)if(m!=top[0]&&rank[m]<rank[top[1]])top[1]=m;
+    vc_ng_top_two(rank,top);
     if(!vc_ng_fit_input(&plain,proxy,cfg,NULL,zeros.mask,NULL,NULL,NULL)||
        ng_activity_symbol_values(plain.symbols,activity)||
        !vc_ng_distribution_fit(&s->stats[0],plain.symbols,activity,n,zeros.mask,0)||
@@ -142,13 +140,12 @@ int vc_ng_medium_encode(const uint8_t *src,unsigned d,uint8_t *out,size_t cap,si
     if(!s)goto done;
     s->src=src;s->d=d;s->n=(size_t)d*d*d;s->blocks=s->n/64;
     if(!vc_ng_scan(&s->zero,src,d))goto done;
-    s->choices=calloc(s->blocks,1);
-    if(!s->choices)goto done;
     if(s->zero.count==s->blocks){
-        vc_ng_choice zero={12,255,0,{0,0}};uint16_t q[15]={0};
-        if(!vc_ng_frame_encode(d,4,1,NULL,0,&zero,1,s->choices,NULL,q,16,NULL,&frame,&frame_size))goto done;
+        if(!vc_ng_frame_all_zero(d,&frame,&frame_size))goto done;
         goto finish;
     }
+    s->choices=calloc(s->blocks,1);
+    if(!s->choices)goto done;
     if(!screen(s,&singleton))goto done;
     s->candidate[0]=malloc(s->n);s->candidate[s->third]=malloc(s->n);
     if(!s->candidate[0]||!s->candidate[s->third])goto done;

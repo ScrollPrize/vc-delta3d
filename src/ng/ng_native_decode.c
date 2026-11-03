@@ -22,10 +22,7 @@ void* ng_causal_create(const uint8_t* params,size_t n,int history) {
 #include "ng_bank_reconstruct.h"
 
 #define NG_BANK_DECLARE(d) int ng_fixed##d##_bank_wave(void* const*,unsigned,const int32_t*,const uint8_t*,uint8_t*,const uint8_t*,size_t,const ng_decode_context*);
-NG_BANK_DECLARE(32)
-NG_BANK_DECLARE(64)
-NG_BANK_DECLARE(128)
-NG_BANK_DECLARE(256)
+NG_FIXED_SIZES(NG_BANK_DECLARE)
 
 int ng_choice_wave_decode(void* const*s,unsigned count,unsigned mode,const int32_t*w,const uint8_t*c,const uint8_t*banks,uint8_t*out,const uint8_t*header,size_t hn,const uint8_t*payload,size_t pn,unsigned K){
     if(count<1||count>4||mode>1||K<2||K>32||!header||!payload)return -1;
@@ -36,10 +33,9 @@ int ng_choice_wave_decode(void* const*s,unsigned count,unsigned mode,const int32
     ctx.frequent_x=nx>=blocks/4;
     if(NG_X==NG_Y&&NG_X==NG_Z){
         switch(NG_X){
-        case 32:return ng_fixed32_bank_wave(s,mode,w,c,out,header,hn,&ctx);
-        case 64:return ng_fixed64_bank_wave(s,mode,w,c,out,header,hn,&ctx);
-        case 128:return ng_fixed128_bank_wave(s,mode,w,c,out,header,hn,&ctx);
-        case 256:return ng_fixed256_bank_wave(s,mode,w,c,out,header,hn,&ctx);
+#define NG_CASE(d) case d:return ng_fixed##d##_bank_wave(s,mode,w,c,out,header,hn,&ctx);
+        NG_FIXED_SIZES(NG_CASE)
+#undef NG_CASE
         }
     }
     return ng_bank_reconstruct_core(s,mode,w,c,out,header,hn,&ctx);

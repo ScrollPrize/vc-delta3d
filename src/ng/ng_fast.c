@@ -62,11 +62,10 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     vc_ng_occupancy full = {0}, screen = {0};
     vc_ng_fit fits[2] = {{0}}, final_fit = {0};
     uint8_t *proxy = NULL, *candidate[12] = {0}, *classes = NULL, *symbols = NULL;
-    uint8_t *selected = NULL, *active_symbols = NULL, *frame = NULL;
-    uint16_t *activity = NULL, *active_activity = NULL;
+    uint8_t *selected = NULL, *frame = NULL;
+    uint16_t *activity = NULL;
     void *session = NULL;
-    size_t frame_size = 0, empty_size = 0;
-    uint8_t empty[65536];
+    size_t frame_size = 0;
     uint32_t counts[16][256], histogram[2560];
     uint16_t thresholds[15], final_thresholds[15];
     double screening[12], costs[5];
@@ -75,14 +74,12 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     ng_current_geometry = (ng_geometry){(int)d,(int)d,(int)d};
     ng_choice_edge = 4;
     if (!vc_ng_scan(&full,src,d)) goto done;
-    selected = calloc(full.blocks,1);
-    if (!selected) goto done;
     if (full.count == full.blocks) {
-        vc_ng_choice zero = {12,255,0,{0,0}};
-        uint16_t t[15] = {0};
-        if (!vc_ng_frame_encode(d,4,1,NULL,0,&zero,1,selected,NULL,t,16,NULL,&frame,&frame_size)) goto done;
+        if (!vc_ng_frame_all_zero(d,&frame,&frame_size)) goto done;
         goto finish;
     }
+    selected = calloc(full.blocks,1);
+    if (!selected) goto done;
     const uint8_t *sample = src;
     if (d > 32) {
         proxy = malloc(n);
@@ -106,10 +103,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
         screening[m] = cost;
     }
     /* Stable ascending predictor ID resolves equal histogram costs. */
-    for (unsigned m = 1; m < 12; ++m) if (screening[m] < screening[top[0]]) top[0] = m;
-    top[1] = top[0] == 0 ? 1 : 0;
-    for (unsigned m = 0; m < 12; ++m)
-        if (m != top[0] && screening[m] < screening[top[1]]) top[1] = m;
+    vc_ng_top_two(screening,top);
     int cfg[6] = {3,3,1,16,40,d>32?4:128};
     session = ng_fit_session_create();
     if (!session) goto done;
@@ -179,25 +173,9 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
             if (ng_activity_symbol_values(symbols,activity)) goto done;
         }
     }
-    size_t active_n = full_n;
-    const uint8_t *ss = symbols;const uint16_t *aa = activity;
-    if (full.count) {
-        active_n = full_n - full.count*64;
-        active_symbols = malloc(active_n);
-        active_activity = malloc(active_n*sizeof(*active_activity));
-        if (!active_symbols || !active_activity) goto done;
-        memset(histogram,0,sizeof(histogram));
-        size_t j=0;
-        for (size_t i=0;i<full_n;++i) if (full.mask[i]) {
-            active_symbols[j]=symbols[i];active_activity[j++]=activity[i];++histogram[activity[i]];
-        }
-        ss=active_symbols;aa=active_activity;
-    }
-    if (!vc_ng_quantiles(histogram,16,thresholds) ||
-        !vc_ng_refine_thresholds(ss,aa,active_n,thresholds,16,NULL,NULL,0,1,1,final_thresholds) ||
+    if (!vc_ng_search_thresholds(symbols,activity,full_n,full.mask,NULL,NULL,0,1,2,histogram,final_thresholds) ||
         !vc_ng_classify(activity,full_n,final_thresholds,16,classes)) goto done;
-    if (!learned && ng_bank_empty_model(empty,sizeof(empty),&empty_size)) goto done;
-    vc_ng_model model = {learned?final_fit.params:empty,learned?final_fit.param_size:empty_size};
+    vc_ng_model model = {final_fit.params,final_fit.param_size};
     vc_ng_choice menu[3];unsigned remap[24],count=0;
     for (unsigned j=0;j<24;++j) remap[j]=255;
     for (size_t b=0;b<full.blocks;++b) {
@@ -215,7 +193,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
         for (size_t b=0;b<full.blocks;++b) if (full.empty[b]) selected[b]=(uint8_t)count;
         ++count;
     }
-    if (!vc_ng_frame_encode(d,4,1,&model,1,menu,count,selected,symbols,final_thresholds,16,classes,&frame,&frame_size)) goto done;
+    if (!vc_ng_frame_encode(d,4,1,&model,learned?1:0,menu,count,selected,symbols,final_thresholds,16,classes,&frame,&frame_size)) goto done;
 finish:
     if (frame_size>cap) goto done;
     memcpy(out,frame,frame_size);*written=frame_size;rc=0;
@@ -226,7 +204,7 @@ done:
     for (unsigned m=0;m<12;++m) free(candidate[m]);
     free(full.empty);free(full.mask);free(screen.empty);free(screen.mask);
     free(proxy);free(classes);free(symbols);free(activity);free(selected);
-    free(active_symbols);free(active_activity);free(frame);
+    free(frame);
     ng_current_geometry=saved_geometry;ng_choice_edge=saved_edge;
     return rc;
 }

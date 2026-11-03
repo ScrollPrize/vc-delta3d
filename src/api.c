@@ -73,8 +73,8 @@ int vc_decompress_with_magic(const uint8_t *src,size_t size,const uint8_t expect
 #ifdef VC_DELTA3D_MODERN
     if(!memcmp(expected,magic,4)) {
         if(vc_indexed_header_size(src,size)) return vc_indexed_decode(src,size,out,count);
-        size_t bytes=frame_bytes(src,size);
-        if(bytes) return count==bytes && vc_ng_preset_decode(src,size,out,count)==0;
+        if(size>=4 && !memcmp(src,"NCF1",4))
+            return vc_ng_preset_decode(src,size,out,count)==0;
     }
 #endif
     return vc_legacy_decode(src,size,expected,out,count);

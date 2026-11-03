@@ -1,6 +1,8 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+/* Fixed specializations use the same kernels as arbitrary geometry. */
+#define NG_FIXED_SIZES(M) M(32) M(64) M(128) M(256)
 #ifndef NG_BLOCK_DIM
 #define NG_BLOCK_DIM 128
 #endif

@@ -32,6 +32,14 @@ double vc_ng_model_cost(const vc_ng_model*models,unsigned nm,const vc_ng_choice*
     free(h.data);free(z);return cost;
 }
 
+int vc_ng_frame_all_zero(unsigned d,uint8_t **out,size_t *size)
+{
+    uint8_t *selectors=calloc((size_t)(d/4)*(d/4)*(d/4),1);
+    vc_ng_choice zero={12,255,0,{0,0}};uint16_t t[15]={0};
+    int ok=selectors&&vc_ng_frame_encode(d,4,1,NULL,0,&zero,1,selectors,NULL,t,16,NULL,out,size);
+    free(selectors);return ok;
+}
+
 int vc_ng_frame_encode_zeros(unsigned d,const vc_ng_model *models,unsigned nm,
     const vc_ng_choice *menu,unsigned nc,const uint8_t *selectors,const uint8_t *symbols,
     const uint16_t *thresholds,const uint8_t *classes,const uint8_t *empty,uint8_t **out,size_t *size)

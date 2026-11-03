@@ -2,6 +2,7 @@
  * Constant fitted models make the expected prediction explicit; residuals and
  * causal activity still use the real wire mapping and entropy schedule. */
 #include "ng_frame.h"
+#include "ng_search.h"
 #include <vc_delta3d/codec.h>
 #include <vc_delta3d/indexed.h>
 #include "residual_bridge.h"
@@ -71,6 +72,10 @@ static void run(unsigned edge,unsigned nm,unsigned banks,unsigned K,unsigned mod
     free(frame);free(activity);free(sel);free(cl);free(sy);free(out);free(src);
 }
 int main(void){
+    double rank[12]={0};unsigned top[2];
+    vc_ng_top_two(rank,top);assert(top[0]==0&&top[1]==1);
+    rank[7]=-1;vc_ng_top_two(rank,top);assert(top[0]==7&&top[1]==0);
+    rank[3]=-1;vc_ng_top_two(rank,top);assert(top[0]==3&&top[1]==7);
     const unsigned edges[]={2,4,8,16,32},classes[]={2,16,32};
     unsigned cases=0;
     for(unsigned isa=0;isa<2;isa++){

@@ -28,7 +28,7 @@ int vc_ng_leaf_decode(const uint8_t *src,size_t size,const uint32_t expected[3],
     selector_bytes=vc_get(&r,4);
     if(expected&&(x!=expected[2]||y!=expected[1]||z!=expected[0]))goto done;
     unsigned edge=mode>>8; mode&=255;
-    if(!r.ok || !ng_geometry_valid(x,y,z) || cap<(size_t)x*y*z || mode>1 || nm>4 || !nc || nc>60 ||
+    if(!r.ok || !ng_geometry_valid(x,y,z) || cap!=(size_t)x*y*z || mode>1 || nm>4 || !nc || nc>60 ||
        (edge!=2 && edge!=4 && edge!=8 && edge!=16 && edge!=32)) goto done;
     ng_current_geometry=(ng_geometry){(int)x,(int)y,(int)z};ng_choice_edge=edge;
     const uint8_t *params[4]={0};size_t lengths[4]={0};vc_ng_choice menu[60];

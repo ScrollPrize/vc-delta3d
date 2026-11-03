@@ -23,6 +23,7 @@ p.add_argument('--export',action='store_true')
 p.add_argument('--repetitions',type=int,default=8)
 p.add_argument('--cpu',type=int,default=64)
 p.add_argument('--group',help='Optional isolation subset; final validation uses all groups')
+p.add_argument('--encode',action='store_true',help='Alternate native encoder calls instead of decoder calls')
 a=p.parse_args()
 root=Path('/data/hendrik/compression_experiments/villa4')
 package=Path(__file__).resolve().parents[1]/'python/vc_delta3d'
@@ -50,6 +51,16 @@ else:
     for fn in decoders:
         fn.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_size_t]
         fn.restype=ctypes.c_int
+    class Options(ctypes.Structure):
+        _fields_=[('shape',ctypes.c_uint32*3),('channels',ctypes.c_uint32),
+                  ('layout',ctypes.c_uint),('element_size',ctypes.c_uint),
+                  ('quantization',ctypes.c_uint),('preset',ctypes.c_int)]
+    encoders=[lib.vc_compress for lib in libraries]
+    for lib,fn in zip(libraries,encoders):
+        fn.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.POINTER(Options),
+                     ctypes.POINTER(ctypes.c_void_p),ctypes.POINTER(ctypes.c_size_t)]
+        fn.restype=ctypes.c_int
+        lib.vc_free.argtypes=[ctypes.c_void_p]
     os.sched_setaffinity(0,{a.cpu})
     a.output.parent.mkdir(parents=True,exist_ok=True)
     with a.output.open('w') as f:
@@ -57,11 +68,19 @@ else:
             frame=frame_path(r).read_bytes();expected=raw(r)
             times=[[],[]];out=ctypes.create_string_buffer(len(expected))
             for decoder in decoders:assert decoder(frame,len(frame),out,len(expected)) and out.raw==expected
+            options=Options((128,128,128),0,0,1,1,3+['fast','medium','slow','slower'].index(r['preset']))
             started=time.monotonic()
             for rep in range(a.repetitions):
                 for k in ([0,1] if rep%2==0 else [1,0]):
-                    t=time.perf_counter();ok=decoders[k](frame,len(frame),out,len(expected));times[k].append(time.perf_counter()-t)
-                    assert ok and out.raw==expected
+                    if a.encode:
+                        ptr=ctypes.c_void_p();size=ctypes.c_size_t()
+                        t=time.perf_counter();ok=encoders[k](expected,len(expected),ctypes.byref(options),ctypes.byref(ptr),ctypes.byref(size));times[k].append(time.perf_counter()-t)
+                        assert ok
+                        for decoder in decoders:assert decoder(ptr,size.value,out,len(expected)) and out.raw==expected
+                        libraries[k].vc_free(ptr)
+                    else:
+                        t=time.perf_counter();ok=decoders[k](frame,len(frame),out,len(expected));times[k].append(time.perf_counter()-t)
+                        assert ok and out.raw==expected
             f.write(json.dumps(dict(group=r['group'],preset=r['preset'],sha256=r['sha256'],before=times[0],after=times[1],started=started,finished=time.monotonic()))+'\n');f.flush()
     data=[json.loads(s) for s in a.output.read_text().splitlines()]
     for preset in ['fast','medium','slow','slower']:

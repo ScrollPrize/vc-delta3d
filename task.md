@@ -648,3 +648,27 @@ legacy Delta3D fallback remain. No pending experiment or running benchmark.
 
 Report: experiments/preset_only_cleanup.md. Raw validation and monitored runs:
 /data/hendrik/compression_experiments/villa4/encoder_speed/preset_only_cleanup_20261103/.
+
+## Follow-up redundancy pass (2026-11-03)
+
+User requested all six read-only audit findings be fixed and checked for
+compatibility, simplicity and speed. Implemented single-pass public NCF1 header
+decode (exact output-size checking moved to the actual leaf parser), omission
+of unreferenced empty fitted models, shared masked threshold fitting with an
+optional precomputed histogram, shared stable top-two ranking, shared all-zero
+frame construction and one macro list for fixed-geometry C dispatch/declarations.
+No new frame version or compatibility path. Decoder kernels are unchanged.
+
+Initial 576-case test: old/new decoding works both ways, selector/residual bytes
+identical. 364 frames save six header bytes each; 212 are unchanged. Release,
+portable and ASan/UBSan CTest pass 7/7; Python tests pass 139. ASan needs
+`ulimit -s 8192` here (unlimited stack causes shadow-address collision before
+any test executes). Added oversized-output rejection and all-zero preset tests.
+Final paired timing validation completed over all 576 cases. Encoder gains:
+fast +3.76%, medium +1.94%, slow +0.51%, slower +0.35%. Two eight-repeat decoder
+runs show -0.01% to +0.37%, then +1.08% to +1.19%; no significant regression.
+CPU/SMT monitoring is recorded; an initial noninterleaved baseline was stopped
+when unrelated load increased and is excluded from performance conclusions.
+Production lines 7,540 -> 7,530, 81 files unchanged. Full report and commands:
+experiments/redundancy_cleanup.md. All six fixes complete; no run pending.
+Results: /data/hendrik/compression_experiments/villa4/encoder_speed/redundancy_cleanup_20261103/.

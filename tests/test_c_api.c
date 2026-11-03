@@ -21,6 +21,7 @@ int main(void) {
         /* Exercise malformed/truncated input with the same public C path,
          * including under ASan/UBSan. Never expose a partial success. */
         assert(!vc_decompress(frame,bytes,decoded,count-1));
+        assert(!vc_decompress(frame,bytes,decoded,count+1));
         for(size_t cut=0;cut<32 && cut<bytes;++cut)
             assert(!vc_decompress(frame,cut,decoded,count));
         assert(!vc_decompress(frame,bytes-1,decoded,count));
@@ -77,5 +78,13 @@ int main(void) {
     assert(vc_index_read(ext,sizeof(ext),47+long_leaf+4,&large));
     assert(large.leaf_count==2&&large.leaves[1].offset==47+long_leaf);vc_index_free(&large);
     ext[35]=255;assert(!vc_index_read(ext,sizeof(ext),47+long_leaf+4,&large));
+    memset(src,0,n);
+    for(unsigned p=VC_FAST;p<=VC_SLOWER;++p){
+        opt.preset=(vc_preset)p;
+        assert(vc_compress(src,n,&opt,&frame,&bytes));
+        assert(vc_decompress(frame,bytes,decoded,n)&&!memcmp(src,decoded,n));
+        assert(!vc_decompress(frame,bytes,decoded,n+1));
+        vc_free(frame);
+    }
     free(src);free(decoded);puts("public C API and independent leaf decode passed");return 0;
 }

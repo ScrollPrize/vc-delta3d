@@ -117,9 +117,7 @@ static int screen(search *s,const uint8_t *src,unsigned d,const vc_ng_occupancy 
             !vc_ng_distribution_fit(&temporary,fixed[m],activity,SAMPLE_N,occupancy.mask,0))goto done;
         rank[m]=vc_ng_distribution_score(&temporary);
     }
-    for(unsigned m=1;m<12;++m)if(rank[m]<rank[top[0]])top[0]=m;
-    top[1]=top[0]?0:1;
-    for(unsigned m=0;m<12;++m)if(m!=top[0]&&rank[m]<rank[top[1]])top[1]=m;
+    vc_ng_top_two(rank,top);
     for(unsigned m=0;m<12;++m)if(m!=top[0]&&m!=top[1])top[top_count++]=m;
     top[top_count++]=0;
     int cfg[6];memcpy(cfg,config,sizeof(cfg));if(d>32)cfg[5]=4;
@@ -218,7 +216,6 @@ static int encode_plan(const uint8_t *src,unsigned d,const vc_ng_occupancy *zero
     search *search,const unsigned *order,unsigned order_count,const plan *p,uint8_t **out,size_t *size)
 {
     full_state *s=calloc(1,sizeof(*s));int ok=0;
-    uint8_t empty[65536];size_t empty_size=0;
     if(!s)return 0;
     s->n=(size_t)d*d*d;s->blocks=s->n/64;s->src=src;s->zero=zero;s->count=p->count;
     unsigned map[MODELS],used[MODELS]={0};
@@ -261,17 +258,13 @@ static int encode_plan(const uint8_t *src,unsigned d,const vc_ng_occupancy *zero
     }
     uint16_t t[15];
     if(!vc_ng_search_thresholds(s->symbols,s->activity,s->n,zero->mask,s->block,s->local,
-        s->blocks,s->count,2,t)||!vc_ng_classify(s->activity,s->n,t,16,s->classes[0]))goto done;
+        s->blocks,s->count,2,NULL,t)||!vc_ng_classify(s->activity,s->n,t,16,s->classes[0]))goto done;
     /* Retain model order across finalist menus, but omit unreferenced models. */
     unsigned live[3]={0},remap[3],nm=0;
     for(size_t b=0;b<s->blocks;++b)if(s->canonical[b]>=12)live[(s->canonical[b]-12)/12]=1;
     vc_ng_model models[3];
     for(unsigned k=0;k<s->model_count;++k)if(live[k]){
         remap[k]=nm;models[nm++]=(vc_ng_model){s->fit[k]->params,s->fit[k]->param_size};
-    }
-    if(!nm){
-        if(ng_bank_empty_model(empty,sizeof(empty),&empty_size))goto done;
-        models[nm++]=(vc_ng_model){empty,empty_size};
     }
     vc_ng_choice menu[5];unsigned nc=0,ids[48];for(unsigned i=0;i<48;++i)ids[i]=255;
     for(size_t b=0;b<s->blocks;++b){
@@ -305,9 +298,7 @@ int vc_ng_slow_encode(const uint8_t *src,unsigned d,unsigned preset,uint8_t *out
     int cfg[6]={3,3,preset?3:1,16,preset?160:40,1};
     if(!s||!vc_ng_scan(&zeros,src,d))goto done;
     if(zeros.count==zeros.blocks){
-        uint8_t *choices=calloc(zeros.blocks,1);uint16_t t[15]={0};vc_ng_choice c={12,255,0,{0,0}};
-        int ok=choices&&vc_ng_frame_encode(d,4,1,NULL,0,&c,1,choices,NULL,t,16,NULL,&best,&best_size);
-        free(choices);if(!ok)goto done;goto finish;
+        if(!vc_ng_frame_all_zero(d,&best,&best_size))goto done;goto finish;
     }
     if(!screen(s,src,d,&zeros,cfg,plans))goto done;
     unsigned order[MODELS],count=0,seen[MODELS]={0};

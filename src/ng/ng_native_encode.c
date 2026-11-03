@@ -4,19 +4,19 @@
 #define NG_DECLARE_FIXED(d) \
 int ng_fixed##d##_encode_ex(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*); \
 int ng_fixed##d##_activity_values(const uint8_t*,uint16_t*,uint32_t*);
-NG_DECLARE_FIXED(32)
-NG_DECLARE_FIXED(64)
-NG_DECLARE_FIXED(128)
-NG_DECLARE_FIXED(256)
+NG_FIXED_SIZES(NG_DECLARE_FIXED)
 typedef struct {
     int (*encode)(const uint8_t*,const void*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*);
     int (*activity_values)(const uint8_t*,uint16_t*,uint32_t*);
 } ng_fixed_kernels;
-#define NG_FIXED_ENTRY(d) {ng_fixed##d##_encode_ex,ng_fixed##d##_activity_values}
-static const ng_fixed_kernels ng_fixed_sets[]={NG_FIXED_ENTRY(64),NG_FIXED_ENTRY(128),NG_FIXED_ENTRY(256),NG_FIXED_ENTRY(32)};
 static const ng_fixed_kernels* ng_fixed_current(void) {
     if(NG_X!=NG_Y || NG_X!=NG_Z)return NULL;
-    return NG_X==64?&ng_fixed_sets[0]:NG_X==128?&ng_fixed_sets[1]:NG_X==256?&ng_fixed_sets[2]:NG_X==32?&ng_fixed_sets[3]:NULL;
+    switch(NG_X){
+#define NG_CASE(d) case d:{static const ng_fixed_kernels k={ng_fixed##d##_encode_ex,ng_fixed##d##_activity_values};return &k;}
+    NG_FIXED_SIZES(NG_CASE)
+#undef NG_CASE
+    default:return NULL;
+    }
 }
 static vcn_status ng_encode_core(const uint8_t* src,const vcn_lc_cfg* cf,uint8_t* out,size_t cap,size_t* n,uint8_t* sy,uint8_t* cl) {
     const ng_fixed_kernels* fixed=ng_fixed_current();
@@ -94,16 +94,16 @@ int ng_wave_encode(const uint8_t* params,size_t n,const uint8_t* sy,const uint8_
  * native class and symbol kernels, including fractional Q8 sign mapping. */
 #include "ng_bank_symbols.h"
 #define NG_BANK_ARGS unsigned c,const uint8_t*const*p,const size_t*n,const uint16_t*const*b,const uint8_t*s,const uint8_t*x,uint8_t*const*v,uint8_t*y,uint16_t*a
-int ng_fixed32_bank_symbols(NG_BANK_ARGS,int);
-int ng_fixed64_bank_symbols(NG_BANK_ARGS,int);
-int ng_fixed128_bank_symbols(NG_BANK_ARGS,int);
-int ng_fixed256_bank_symbols(NG_BANK_ARGS,int);
+#define NG_DECLARE_BANK(d) int ng_fixed##d##_bank_symbols(NG_BANK_ARGS,int);
+NG_FIXED_SIZES(NG_DECLARE_BANK)
+#undef NG_DECLARE_BANK
 static int ng_bank_dispatch(NG_BANK_ARGS,int selected){
     if(NG_X==NG_Y&&NG_X==NG_Z){
-        if(NG_X==32)return ng_fixed32_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
-        if(NG_X==64)return ng_fixed64_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
-        if(NG_X==128)return ng_fixed128_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
-        if(NG_X==256)return ng_fixed256_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
+        switch(NG_X){
+#define NG_CASE(d) case d:return ng_fixed##d##_bank_symbols(c,p,n,b,s,x,v,y,a,selected);
+        NG_FIXED_SIZES(NG_CASE)
+#undef NG_CASE
+        }
     }
     return ng_bank_symbols_impl(c,p,n,b,s,x,v,y,a,selected);
 }
