@@ -558,3 +558,20 @@ All identified cleanup items are complete. Remaining specialized paths serve
 the supported format or real ISA/model combinations; historical experiment
 reports are documentation only. See experiments/final_cleanup.md and
 final_cleanup_20261103/paired_final_no_scalar.jsonl for results and commands.
+
+## Attribute remaining decode regression
+
+User requests specific attribution, not acceptance of an unexplained 0.7–1.4%
+loss. Preserve the committed e0c855e library; test one source reversion at a
+time against it, using balanced alternating native calls and exact output
+checks on the same 576 frames. Recheck promising changes against 22e2583 and
+repeat measurements before attributing cause. Results live in
+encoder_speed/cleanup_cause_20261103. Do not retain diagnostic legacy branches.
+
+Completed seven diagnostic reversions and repeated baseline, reversed-order,
+identical-binary and contention-monitored comparisons. No single cleanup was
+shown to cause the full remaining difference; repeat estimates vary. User
+accepted retaining the cleanup and set 0.5% as the future tolerance. Restored
+all production source to e0c855e; retained monitoring tooling and reports only.
+See experiments/cleanup_attribution.md. Do not describe the small earlier
+regression as a proven source-level trade-off or solely as system contention.

@@ -1,5 +1,9 @@
 # Final retained-path cleanup — 2026-11-03
 
+Follow-up: [attribution checks](cleanup_attribution.md) found variable repeat
+timings and did not establish a specific cause for the remaining small loss.
+Treat the performance table below as one measurement, not an isolated trade-off.
+
 Checkpoint before this pass: `22e2583` on `refactor/c-only-presets`.
 This completes the remaining cleanup items from `option_cleanup.md` without
 changing frame bytes, compression choices, decoded values, or public APIs.

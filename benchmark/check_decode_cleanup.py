@@ -20,7 +20,7 @@ p.add_argument('--after',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--frames',type=Path,required=True)
 p.add_argument('--export',action='store_true')
-p.add_argument('--repetitions',type=int,default=7)
+p.add_argument('--repetitions',type=int,default=8)
 p.add_argument('--cpu',type=int,default=64)
 p.add_argument('--group',help='Optional isolation subset; final validation uses all groups')
 a=p.parse_args()
@@ -57,11 +57,12 @@ else:
             frame=frame_path(r).read_bytes();expected=raw(r)
             times=[[],[]];out=ctypes.create_string_buffer(len(expected))
             for decoder in decoders:assert decoder(frame,len(frame),out,len(expected)) and out.raw==expected
+            started=time.monotonic()
             for rep in range(a.repetitions):
                 for k in ([0,1] if rep%2==0 else [1,0]):
                     t=time.perf_counter();ok=decoders[k](frame,len(frame),out,len(expected));times[k].append(time.perf_counter()-t)
                     assert ok and out.raw==expected
-            f.write(json.dumps(dict(group=r['group'],preset=r['preset'],sha256=r['sha256'],before=times[0],after=times[1]))+'\n');f.flush()
+            f.write(json.dumps(dict(group=r['group'],preset=r['preset'],sha256=r['sha256'],before=times[0],after=times[1],started=started,finished=time.monotonic()))+'\n');f.flush()
     data=[json.loads(s) for s in a.output.read_text().splitlines()]
     for preset in ['fast','medium','slow','slower']:
         rs=[r for r in data if r['preset']==preset]
