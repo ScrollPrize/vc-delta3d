@@ -6,8 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-double vc_ng_histogram_cost(const uint32_t *counts,int bits,int fast) {
-    if(!fast)return ng_hist_cost(counts,bits);
+double vc_ng_histogram_cost(const uint32_t *counts,int bits) {
     static _Thread_local double logs[4097];
     static _Thread_local int ready;
     if(!ready) { for(unsigned i=1;i<=4096;++i)logs[i]=log2((double)i);ready=1; }
@@ -42,25 +41,23 @@ static double interval(costs *c,unsigned l,unsigned r) {
         uint32_t hist[256];
         const uint32_t *a=c->prefix+((size_t)l*c->groups+g)*256,*b=c->prefix+((size_t)r*c->groups+g)*256;
         for(unsigned s=0;s<256;++s)hist[s]=b[s]-a[s];
-        *result+=vc_ng_histogram_cost(hist,12,1);
+        *result+=vc_ng_histogram_cost(hist,12);
     }
     return *result;
 }
 static int compare(const void *a,const void *b) {return (int)*(const uint16_t*)a-(int)*(const uint16_t*)b;}
 int vc_ng_refine_thresholds(const uint8_t *raw,const uint16_t *a,size_t n,const uint16_t *old,unsigned K,
     const uint32_t *block,const uint8_t *choices,size_t choice_count,unsigned groups,
-    int symbols,unsigned grid,int global,uint16_t *out) {
-    if(!raw||!a||!old||!out||K<2||K>256||!groups||groups>256||grid>2560||(groups>1&&(!block||!choices)))return 0;
+    int global,uint16_t *out) {
+    if(!raw||!a||!old||!out||K<2||K>256||!groups||groups>256||(groups>1&&(!block||!choices)))return 0;
     uint16_t *edges=NULL;uint32_t *prefix=NULL;double *cache=NULL,*dp=NULL;unsigned *prev=NULL;
     int ok=0;unsigned E=0;
-    size_t capacity=(grid?grid:33*(K-1))+K;
+    const unsigned grid=64;
+    size_t capacity=grid+K;
     edges=malloc(capacity*sizeof(*edges));if(!edges)goto done;
-    if(grid) {
+    {
         uint32_t hist[2560]={0};for(size_t i=0;i<n;++i) {if(a[i]>=2560)goto done;++hist[a[i]];}
         if(!vc_ng_quantiles(hist,grid,edges))goto done;E=grid-1;
-    } else for(unsigned k=0;k<K-1;++k) {
-        int l=old[k]>16?old[k]-16:0,r=old[k]+16<2559?old[k]+16:2559;
-        for(int v=l;v<=r;++v)edges[E++]=(uint16_t)v;
     }
     for(unsigned k=0;k<K-1;++k) {if(old[k]>2559)goto done;edges[E++]=old[k];}
     edges[E++]=2559;qsort(edges,E,sizeof(*edges),compare);
@@ -72,7 +69,7 @@ int vc_ng_refine_thresholds(const uint8_t *raw,const uint16_t *a,size_t n,const 
     for(size_t i=0;i<n;++i) {
         if(a[i]>=2560)goto done;
         unsigned g=0;if(groups>1) {if(block[i]>=choice_count)goto done;g=choices[block[i]];if(g>=groups)goto done;}
-        unsigned value=symbols?raw[i]:(uint8_t)(((unsigned)raw[i]<<1)^(0u-((unsigned)raw[i]>>7)));
+        unsigned value=raw[i];
         ++prefix[((size_t)(bin[a[i]]+1)*groups+g)*256+value];
     }
     for(unsigned e=1;e<=E;++e)for(unsigned g=0;g<groups;++g)for(unsigned s=0;s<256;++s)

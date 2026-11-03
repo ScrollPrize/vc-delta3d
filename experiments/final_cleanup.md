@@ -1,5 +1,7 @@
 # Final retained-path cleanup — 2026-11-03
 
+Subsequent audit/removal pass: [preset-only encoder cleanup](preset_only_cleanup.md).
+
 Follow-up: [attribution checks](cleanup_attribution.md) found variable repeat
 timings and did not establish a specific cause for the remaining small loss.
 Treat the performance table below as one measurement, not an isolated trade-off.

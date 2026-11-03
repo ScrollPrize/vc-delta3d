@@ -31,7 +31,7 @@ int vc_index_read(const uint8_t*data,size_t size,uint64_t object,vc_chunk_index*
             uint64_t x=read_le(data+p,width)+1;p+=width;if(tag<3)x*=32;
             if(x>UINT32_MAX)goto fail;value=(uint32_t)x;
         }
-        t[nt++]=(node){tag,VC_LEAF_CHOICE,value,0};needed--;
+        t[nt++]=(node){tag,value,0};needed--;
         if(tag<4)needed+=2;else if(tag<8)needed++;
         if(needed>header-p)goto fail;
     }

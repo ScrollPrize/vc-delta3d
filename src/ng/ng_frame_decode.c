@@ -12,10 +12,6 @@ static uint8_t *read_header(const uint8_t *src,size_t size,size_t *header_size,s
     uint8_t*h=NULL;if(!vc_header_decode(src+4,zn,&h,&hn))return NULL;
     *header_size=hn; *encoded_size=zn; return h;
 }
-unsigned vc_ng_frame_dimension(const uint8_t *src,size_t size) {
-    unsigned shape[3];if(!vc_ng_frame_shape(src,size,shape))return 0;
-    return shape[0]==shape[1]&&shape[0]==shape[2]?shape[0]:0;
-}
 int vc_ng_frame_shape(const uint8_t *src,size_t size,unsigned shape[3]) {
     if(!src||size<8||memcmp(src,"NCF1",4))return 0;
     size_t hn,zn; uint8_t *h=read_header(src+4,size-4,&hn,&zn); if(!h) return 0;

@@ -1,8 +1,6 @@
 /* Public preset dispatch. Save all scoped fitter settings for nested callers. */
 #include "residual_bridge.h"
-int vc_ng_fast_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
-int vc_ng_medium_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
-int vc_ng_slow_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
+#include "ng_frame.h"
 int vc_ng_preset_encode(const uint8_t *s,unsigned d,unsigned preset,uint8_t *out,size_t cap,size_t *n)
 {
     if(preset>3)return -1;

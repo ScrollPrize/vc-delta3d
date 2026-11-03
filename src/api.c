@@ -5,9 +5,7 @@
 #include <string.h>
 #ifdef VC_DELTA3D_MODERN
 #include <vc_delta3d/indexed.h>
-int vc_ng_preset_encode(const unsigned char*,unsigned,unsigned,unsigned char*,size_t,size_t*);
-int vc_ng_preset_decode(const unsigned char*,size_t,unsigned char*,size_t);
-int vc_ng_frame_shape(const unsigned char*,size_t,unsigned[3]);
+#include "ng/ng_frame.h"
 #endif
 static const uint8_t magic[4]={'D','3','D','1'};
 vc_encode_options vc_default_options(void) {

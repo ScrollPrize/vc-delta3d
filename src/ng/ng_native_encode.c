@@ -73,11 +73,10 @@ double ng_hist_cost_logs(const uint32_t* counts,int tb,const double* logs) {
     double bits=16;
     for(unsigned s=0;s<256;s++) {
         if(s<nn){unsigned f=freq[s];do{bits+=8;f>>=7;}while(f);}
-        if(counts[s])bits+=(double)counts[s]*(tb-(logs?logs[freq[s]]:log2((double)freq[s])));
+        if(counts[s])bits+=(double)counts[s]*(tb-logs[freq[s]]);
     }
     return bits;
 }
-double ng_hist_cost(const uint32_t* counts,int tb) {return ng_hist_cost_logs(counts,tb,NULL);}
 
 int ng_wave_encode(const uint8_t* params,size_t n,const uint8_t* sy,const uint8_t* cl,
     uint8_t* out,size_t cap,size_t* size) {
@@ -89,31 +88,6 @@ int ng_wave_encode(const uint8_t* params,size_t n,const uint8_t* sy,const uint8_
     int rc=ng_encode_core(NULL,&cf,out,cap,size,NULL,NULL);free(p);return rc;
 }
 
-
-/* Encoder already knows source samples and fitted NG tap predictions. Only
-   activity depends on previous symbols; reuse original SIMD class/symbol math. */
-int ng_block_symbols(const uint8_t* params,size_t n,const uint8_t* selectors,const uint8_t* src,
-    const uint16_t* base,const uint8_t* const* delta,uint8_t* sy,uint8_t* cl) {
-    const uint8_t* cursor=params;vcn_lc_par* p=NULL;
-    if(vcn_lc_readpar(&cursor,n,&p)!=VCN_OK)return -1;
-    if(cursor!=params+n){free(p);return -1;}
-    uint8_t* e=calloc(VCN_LC_NB,1);if(!e){free(p);return -1;}
-    uint16_t Q[VCN_LC_D];
-    const int block_shift=2,nb=VCN_LC_D>>2,ny=VCN_LC_Y>>2;
-    for(int z=0;z<VCN_LC_Z;z++)for(int y=0;y<VCN_LC_Y;y++) {
-        size_t ri=VCN_LC_IDX(z,y,0),o=((size_t)z*VCN_LC_Y+y)*VCN_LC_D;
-        vcn_lc_row_begin(e,z,y,0);
-        memcpy(Q,base+o,sizeof(Q));VCN_LC_CLS(e,ri,p,Q,cl+o);
-        VCN_LC_SYMS(Q,src+o,sy+o,e+ri);
-        const uint8_t* row_choices=selectors+(((z>>block_shift)*ny+(y>>block_shift))*nb);
-        for(int x=0;x<VCN_LC_D;x++) {
-            unsigned sel=row_choices[x>>block_shift];
-            if(sel){sy[o+x]=delta[sel][o+x];e[ri+x]=(uint8_t)((sy[o+x]+1u)>>1);}
-        }
-        vcn_lc_row_end(e,z,y);
-    }
-    free(e);free(p);return 0;
-}
 
 /* Multiple independently fitted models, all driven by the same actual selected
  * residual history. Fixed candidates precede the model candidates. Reuses the

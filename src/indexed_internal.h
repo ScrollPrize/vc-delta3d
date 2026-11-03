@@ -7,10 +7,8 @@
 #include <vc_delta3d/indexed.h>
 #include <stdlib.h>
 #include <string.h>
-int vc_ng_preset_encode(const unsigned char*,unsigned,unsigned,unsigned char*,size_t,size_t*);
-int vc_ng_rect_encode(const unsigned char*,unsigned,unsigned,unsigned,unsigned char*,size_t,size_t*);
 typedef struct { uint32_t origin[3],shape[3],channel,channels; } domain;
-typedef struct { unsigned tag,policy; uint32_t value; size_t end; } node;
+typedef struct { unsigned tag; uint32_t value; size_t end; } node;
 typedef struct { domain d; size_t node; } job;
 static uint64_t read_le(const uint8_t*p,unsigned n) {
     uint64_t v=0;for(unsigned i=0;i<n;i++)v|=(uint64_t)p[i]<<(8*i);return v;
@@ -68,7 +66,7 @@ static int expand(const node*t,domain root,size_t limit,vc_indexed_leaf**out,siz
                !vc_reserve(&leaves,&lcap,lc+1,sizeof(*leaves)))goto fail;
             vc_indexed_leaf*l=leaves+lc++;memset(l,0,sizeof(*l));
             l->channel=j.d.channel;memcpy(l->origin,j.d.origin,sizeof(l->origin));memcpy(l->shape,j.d.shape,sizeof(l->shape));
-            l->codec=n->policy;continue;
+            l->codec=VC_LEAF_CHOICE;continue;
         }
         domain first,second;uint32_t k;
         if(!children(j.d,n,&first,&second,&k)||pending>limit-lc||k>limit-lc-pending||

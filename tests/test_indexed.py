@@ -29,14 +29,14 @@ def test_independent_ranges_and_compact_header(last,preset):
     np.testing.assert_array_equal(np.frombuffer(Delta3D().decode(f),np.uint8),raw.ravel())
 
 @pytest.mark.parametrize('last',[False,True])
-def test_different_channel_trees_and_rectangular_leaves(last):
+def test_different_channel_trees(last):
     a=np.random.default_rng(782).integers(0,256,(2,64,64,64),dtype=np.uint8)
     raw=np.ascontiguousarray(np.moveaxis(a,0,-1)) if last else a
-    # Channel0: one64³ preset leaf. Channel1: two32x64x64 rectangular baseline leaves.
-    plan=[(3,1,0),(4,0,0),(0,32,0),(4,0,1),(4,0,1)]
+    # Channel0: one64³ preset leaf. Channel1: eight32³ leaves with the same preset.
+    plan=[(3,1),(4,0),(5,2),(6,2),(7,2),(4,0)]
     f=compress_indexed(raw.tobytes(),64,64,64,2,last,'fast',plan)
-    hn=indexed_header_size(f[:8]);assert hn==11+2*2+3+3*4
-    index=read_index(f[:hn],len(f));assert len(index.leaves)==3
+    hn=indexed_header_size(f[:8]);assert hn==11+10+9*4
+    index=read_index(f[:hn],len(f));assert len(index.leaves)==9
     for l in index.leaves:
         z,y,x=l.origin;dz,dy,dx=l.shape
         out=np.frombuffer(decode_indexed_leaf(f[l.offset:l.offset+l.length],l),np.uint8).reshape(l.shape)
@@ -46,9 +46,10 @@ def test_different_channel_trees_and_rectangular_leaves(last):
 @pytest.mark.parametrize('shape',[(32,64,96),(96,160,32),(32,32,1024),(2048,32,32),(256,256,32)])
 def test_rectangular_geometry(shape):
     a=np.zeros(shape,np.uint8);a[...,::7]=123
-    f=encode(a,partition=[(4,0,1)])
-    hn=indexed_header_size(f);index=read_index(f[:hn],len(f));assert index.header_bytes==16
-    assert index.leaves[0].shape==list(shape)
+    f=encode(a)
+    hn=indexed_header_size(f);index=read_index(f[:hn],len(f))
+    assert len(index.leaves)>1
+    assert all(len(set(l.shape))==1 for l in index.leaves)
     np.testing.assert_array_equal(np.frombuffer(Delta3D().decode(f),np.uint8).reshape(shape),a)
 
 def test_auto_spatial_subdivision():
@@ -57,18 +58,29 @@ def test_auto_spatial_subdivision():
     assert len(index.leaves)==6
     np.testing.assert_array_equal(np.frombuffer(Delta3D().decode(f),np.uint8).reshape(a.shape),a)
 
+@pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
+def test_rectangular_chunk_uses_requested_preset(preset):
+    a=np.random.default_rng(785).integers(0,256,(32,64,32),dtype=np.uint8)
+    f=encode(a,predictor=preset);index=read_index(f,len(f))
+    for l in index.leaves:
+        z,y,x=l.origin;dz,dy,dx=l.shape
+        leaf=np.ascontiguousarray(a[z:z+dz,y:y+dy,x:x+dx])
+        assert f[l.offset:l.offset+l.length]==compress_array(leaf,1,preset)[4:]
+    with pytest.raises(ValueError):encode(a,predictor=preset,partition=[(4,0)])
+    with pytest.raises((ValueError,TypeError)):encode(a,partition=[(4,0,1)])
+
 @pytest.mark.parametrize('shape',[(32,32,1056),(288,256,32)])
 def test_leaf_limits_are_not_logical_chunk_limits(shape):
     a=np.zeros(shape,np.uint8)
-    with pytest.raises(ValueError):encode(a,partition=[(4,0,1)])
+    with pytest.raises(ValueError):encode(a,partition=[(4,0)])
     f=encode(a);index=read_index(f,len(f));assert len(index.leaves)>1
     np.testing.assert_array_equal(np.frombuffer(Delta3D().decode(f),np.uint8),a.ravel())
 
 @pytest.mark.parametrize('plan',[
-    [(4,0,0)], # multi-channel leaf
-    [(3,0,0)],[(3,2,0)],[(3,1,0)], # invalid/truncated splits
-    [(3,1,0),(4,0,0),(4,0,0),(4,0,0)], # unreachable extra node
-    [(0,16,0)],[(0,32,0)], # unaligned/out-of-domain
+    [(4,0)], # multi-channel leaf
+    [(3,0)],[(3,2)],[(3,1)], # invalid/truncated splits
+    [(3,1),(4,0),(4,0),(4,0)], # unreachable extra node
+    [(0,16)],[(0,32)], # unaligned/out-of-domain
 ])
 def test_invalid_partitions(plan):
     a=np.zeros((2,32,32,32),np.uint8)
@@ -125,7 +137,7 @@ def test_header_extension_and_64bit_ranges():
 def test_repeated_spatial_template(last):
     a=np.random.default_rng(99).integers(0,256,(3,64,32,64),dtype=np.uint8)
     raw=np.ascontiguousarray(np.moveaxis(a,0,-1)) if last else a
-    plan=[(8,3,0),(5,2,0),(7,2,0),(4,0,0)]
+    plan=[(8,3),(5,2),(7,2),(4,0)]
     f=compress_indexed(raw.tobytes(),64,32,64,3,last,'fast',plan)
     idx=read_index(f,len(f));assert len(idx.leaves)==12
     assert idx.header_bytes==11+7+12*4
@@ -136,8 +148,8 @@ def test_repeated_spatial_template(last):
         assert decode_indexed_leaf(f[l.offset:l.offset+l.length],l)==expected
 
 @pytest.mark.parametrize('plan',[
-    [(8,1,0),(4,0,0)],[(8,3,0),(4,0,0)],[(5,2,0),(4,0,0)],
-    [(8,2,0)],[(9,2,0),(4,0,0)],[(8,2,1),(4,0,0)]])
+    [(8,1),(4,0)],[(8,3),(4,0)],[(5,2),(4,0)],
+    [(8,2)],[(9,2),(4,0)]])
 def test_invalid_repeats(plan):
     with pytest.raises(ValueError):compress_indexed(bytes(2*32**3),32,32,32,2,False,'fast',plan)
 
@@ -150,7 +162,7 @@ def test_compact_repeat_256_and_eight_channel_overhead():
     assert indexed_header_size(f)==46 # plus 8*4 leaf prefixes =78 bytes
 
 def test_expanded_root_dimensions_and_large_header():
-    f=compress_indexed(bytes(257*32**3),8224,32,32,1,False,'fast',[(5,257,0),(4,0,0)])
+    f=compress_indexed(bytes(257*32**3),8224,32,32,1,False,'fast',[(5,257),(4,0)])
     assert f[:4]==b'NGX2'
     idx=read_index(f,len(f));assert idx.shape==[8224,32,32] and len(idx.leaves)==257
     assert decode_indexed_leaf(f[idx.leaves[-1].offset:],idx.leaves[-1])==bytes(32**3)
@@ -163,7 +175,7 @@ def test_expanded_root_dimensions_and_large_header():
     assert idx.leaves[-1].origin==[224,0,0] and idx.leaves[-1].channel==1023
 
 def test_repeat_truncation_and_expansion_bounds():
-    f=compress_indexed(bytes(2*64*32*32),64,32,32,2,False,'fast',[(8,2,0),(5,2,0),(4,0,0)])
+    f=compress_indexed(bytes(2*64*32*32),64,32,32,2,False,'fast',[(8,2),(5,2),(4,0)])
     hn=indexed_header_size(f)
     for cut in range(hn):
         with pytest.raises(ValueError):read_index(f[:cut],len(f))

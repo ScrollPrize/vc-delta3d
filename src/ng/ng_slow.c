@@ -29,7 +29,6 @@ typedef struct {
     uint32_t *block;
     uint8_t *mask;
     unsigned scale;
-    uint8_t empty[65536];size_t empty_size;
 } search;
 
 static void plus_one_cost(vc_ng_distribution *s)
@@ -64,9 +63,9 @@ static double estimate(const search *s,const plan *p)
         hist[k][classes[i]][s->symbols[p->menu[k]][i]]+=s->scale;
     }
     for(size_t b=0;b<SAMPLE_BLOCKS;++b)selectors[p->choices[b]]+=s->scale;
-    double cost=vc_ng_histogram_cost(selectors,12,1);
+    double cost=vc_ng_histogram_cost(selectors,12);
     for(unsigned k=0;k<p->count;++k)for(unsigned c=0;c<16;++c)
-        cost+=vc_ng_histogram_cost(hist[k][c],12,1);
+        cost+=vc_ng_histogram_cost(hist[k][c],12);
     return cost/8.;
 }
 
@@ -108,7 +107,7 @@ static int screen(search *s,const uint8_t *src,unsigned d,const vc_ng_occupancy 
     plan *beam=calloc(200,sizeof(*beam)),*next=calloc(200,sizeof(*next));
     s->block=malloc(SAMPLE_N*sizeof(*s->block));
     if(!proxy||!activity||!beam||!next||!s->block)goto done;
-    if(vc_ng_screen_proxy(src,d,4,zeros->count?zeros->empty:NULL,proxy))goto done;
+    if(vc_ng_screen_proxy(src,d,zeros->count?zeros->empty:NULL,proxy))goto done;
     ng_current_geometry=(ng_geometry){32,32,32};
     if(zeros->count&&!vc_ng_scan(&occupancy,proxy,32))goto done;
     for(unsigned m=0;m<12;++m){fixed[m]=malloc(SAMPLE_N);if(!fixed[m])goto done;s->predictor[m]=m;}
@@ -131,7 +130,6 @@ static int screen(search *s,const uint8_t *src,unsigned d,const vc_ng_occupancy 
             k==12||occupancy.count?NULL:session,NULL,NULL))goto done;
     }
     ng_fit_session_destroy(session);session=NULL;
-    if(ng_bank_empty_model(s->empty,sizeof(s->empty),&s->empty_size))goto done;
     s->scale=(unsigned)((size_t)d*d*d/SAMPLE_N);
     if(occupancy.count){s->mask=malloc(SAMPLE_N);if(!s->mask)goto done;}
     /* Preserve the original octant sample order, including selector IDs. */
@@ -180,7 +178,7 @@ done:
 }
 
 typedef struct {
-    size_t n,blocks;unsigned d,count,ids[3],model_count;
+    size_t n,blocks;unsigned count,ids[3],model_count;
     const uint8_t *src;const vc_ng_occupancy *zero;
     vc_ng_fit *fit[3];
     uint8_t *candidate[48],*symbols,*classes[3],*local,*canonical;
@@ -194,11 +192,11 @@ static int evaluate(full_state *s,int selected_only)
         for(size_t i=0;i<s->n;++i)s->symbols[i]=s->candidate[s->canonical[s->block[i]]][i];
         return ng_activity_symbol_values(s->symbols,s->activity)==0;
     }
-    const uint8_t *params[36];const uint16_t *bases[36];size_t lengths[36];
-    for(unsigned k=0;k<s->model_count;++k)for(unsigned m=0;m<12;++m){
-        unsigned j=12*k+m;params[j]=s->fit[k]->params;lengths[j]=s->fit[k]->param_size;bases[j]=s->fit[k]->base;
+    const uint8_t *params[3];const uint16_t *bases[3];size_t lengths[3];
+    for(unsigned k=0;k<s->model_count;++k){
+        params[k]=s->fit[k]->params;lengths[k]=s->fit[k]->param_size;bases[k]=s->fit[k]->base;
     }
-    return (selected_only?ng_bank_selected_symbols:ng_bank_symbols)(12*s->model_count,params,lengths,
+    return (selected_only?ng_bank_selected_symbols:ng_bank_symbols)(s->model_count,params,lengths,
         bases,s->canonical,s->src,s->candidate,s->symbols,s->activity)==0;
 }
 
@@ -222,7 +220,7 @@ static int encode_plan(const uint8_t *src,unsigned d,const vc_ng_occupancy *zero
     full_state *s=calloc(1,sizeof(*s));int ok=0;
     uint8_t empty[65536];size_t empty_size=0;
     if(!s)return 0;
-    s->n=(size_t)d*d*d;s->blocks=s->n/64;s->d=d;s->src=src;s->zero=zero;s->count=p->count;
+    s->n=(size_t)d*d*d;s->blocks=s->n/64;s->src=src;s->zero=zero;s->count=p->count;
     unsigned map[MODELS],used[MODELS]={0};
     for(unsigned k=0;k<p->count;++k)if(p->menu[k]>=12)used[p->menu[k]-12]=1;
     for(unsigned k=0;k<order_count;++k)if(used[order[k]]){

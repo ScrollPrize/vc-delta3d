@@ -2,6 +2,8 @@
  * Constant fitted models make the expected prediction explicit; residuals and
  * causal activity still use the real wire mapping and entropy schedule. */
 #include "ng_frame.h"
+#include <vc_delta3d/codec.h>
+#include <vc_delta3d/indexed.h>
 #include "residual_bridge.h"
 #include <assert.h>
 #include <stdlib.h>
@@ -53,6 +55,19 @@ static void run(unsigned edge,unsigned nm,unsigned banks,unsigned K,unsigned mod
     assert(vc_ng_frame_encode_shape(X,Y,Z,edge,mode,models,nm,menu,nc,sel,sy,thresholds,K,cl,&frame,&bytes));
     assert(!vc_ng_preset_decode(frame,bytes,out,n));
     assert(!memcmp(src,out,n));
+    if(X!=Y){
+        /* Reader supports rectangular leaves independently of encoder policy. */
+        size_t total=16+bytes-4;uint8_t *indexed=calloc(total,1);assert(indexed);
+        memcpy(indexed,"NGC2",4);indexed[4]=16;indexed[7]=Z/32-1;
+        indexed[8]=Y/32-1;indexed[9]=X/32-1;indexed[11]=8;
+        for(unsigned k=0;k<4;k++)indexed[12+k]=(uint8_t)((bytes-4)>>(8*k));
+        memcpy(indexed+16,frame+4,bytes-4);
+        assert(vc_decompress(indexed,total,out,n)&&!memcmp(src,out,n));
+        vc_chunk_index index;assert(vc_index_read(indexed,16,total,&index));
+        assert(index.leaf_count==1);
+        assert(vc_indexed_leaf_decode(indexed+16,bytes-4,index.leaves,out,n)&&!memcmp(src,out,n));
+        vc_index_free(&index);free(indexed);
+    }
     free(frame);free(activity);free(sel);free(cl);free(sy);free(out);free(src);
 }
 int main(void){

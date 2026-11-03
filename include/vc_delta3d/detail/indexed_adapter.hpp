@@ -42,7 +42,7 @@ inline std::vector<std::byte> compressIndexed(std::span<const std::byte> input,
     for(unsigned a=0;a<3;++a){detail::check(shape[a]>0);dims[a]=unsigned(shape[a]);}
     std::vector<vc_partition_node> plan;
     plan.reserve(opt.partition.size());
-    for(const auto&n:opt.partition)plan.push_back({unsigned(n.axis),n.cut,unsigned(n.rectangularBaseline)});
+    for(const auto&n:opt.partition)plan.push_back({unsigned(n.axis),n.cut});
     uint8_t *raw;size_t size;
     detail::check(vc_indexed_encode(reinterpret_cast<const uint8_t*>(input.data()),input.size(),dims,
         unsigned(channels),unsigned(layout),unsigned(opt.preset),plan.data(),plan.size(),&raw,&size)!=0);

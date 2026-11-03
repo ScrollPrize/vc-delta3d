@@ -10,11 +10,11 @@ int vc_ng_scan(vc_ng_occupancy *o,const uint8_t *src,unsigned d)
     o->blocks=(size_t)(d/4)*(d/4)*(d/4);
     o->empty=malloc(o->blocks);
     if(!o->empty)return 0;
-    o->count=vc_ng_zero_scan(src,d,4,o->empty);
+    o->count=vc_ng_zero_scan(src,d,o->empty);
     if(o->count){
         o->mask=malloc((size_t)d*d*d);
         if(!o->mask)return 0;
-        vc_ng_zero_mask(d,4,o->empty,o->mask);
+        vc_ng_zero_mask(d,o->empty,o->mask);
     }
     return 1;
 }
@@ -43,7 +43,7 @@ int vc_ng_search_thresholds(const uint8_t *symbols,const uint16_t *activity,size
     if(tune){
         uint16_t refined[15];
         if(!vc_ng_refine_thresholds(symbols,activity,n,out,16,blocks,choices,choice_count,
-            groups,1,64,tune==2,refined))goto done;
+            groups,tune==2,refined))goto done;
         memcpy(out,refined,sizeof(refined));
     }
     ok=1;
@@ -78,6 +78,6 @@ done:
 double vc_ng_distribution_score(const vc_ng_distribution *s)
 {
     double cost=0;
-    for(unsigned c=0;c<16;++c)cost+=vc_ng_histogram_cost(s->histogram[c],12,1);
+    for(unsigned c=0;c<16;++c)cost+=vc_ng_histogram_cost(s->histogram[c],12);
     return cost/8.;
 }

@@ -11,7 +11,7 @@ def add(group, names, prefix="src/ng/"):
         groups[path] = group
 
 add("Encoder core", """
-ng_fast.c ng_medium.c ng_slow.c ng_rect.c ng_presets.c
+ng_fast.c ng_medium.c ng_slow.c ng_presets.c
 ng_fit.c ng_fit.h ng_fit_cache.h ng_screen.c ng_screen.h ng_search.c
 ng_search.h ng_select.c ng_select.h ng_thresholds.c ng_thresholds.h
 ng_predict.c ng_predict.h ng_bank_symbols.h ng_activity_values.h

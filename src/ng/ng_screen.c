@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-size_t vc_ng_zero_scan(const uint8_t *src, unsigned d, unsigned e, uint8_t *empty)
+size_t vc_ng_zero_scan(const uint8_t *src, unsigned d, uint8_t *empty)
 {
-    const unsigned nb = d / e;
+    const unsigned e=4, nb=d/4;
     size_t count = 0;
     for (unsigned z = 0; z < d; z += e)
         for (unsigned y = 0; y < d; y += e)
@@ -13,13 +13,9 @@ size_t vc_ng_zero_scan(const uint8_t *src, unsigned d, unsigned e, uint8_t *empt
                 for (unsigned dz = 0; dz < e; ++dz)
                     for (unsigned dy = 0; dy < e; ++dy) {
                         const uint8_t *row = src + ((size_t)(z + dz) * d + y + dy) * d + x;
-                        if (e == 4) {
-                            uint32_t value;
-                            memcpy(&value, row, sizeof(value));
-                            bits |= value;
-                        } else {
-                            for (unsigned dx = 0; dx < e; ++dx) bits |= row[dx];
-                        }
+                        uint32_t value;
+                        memcpy(&value, row, sizeof(value));
+                        bits |= value;
                     }
                 size_t b = ((size_t)(z / e) * nb + y / e) * nb + x / e;
                 empty[b] = bits == 0;
@@ -28,9 +24,9 @@ size_t vc_ng_zero_scan(const uint8_t *src, unsigned d, unsigned e, uint8_t *empt
     return count;
 }
 
-void vc_ng_zero_mask(unsigned d, unsigned e, const uint8_t *empty, uint8_t *mask)
+void vc_ng_zero_mask(unsigned d, const uint8_t *empty, uint8_t *mask)
 {
-    const unsigned nb = d / e;
+    const unsigned e=4, nb=d/4;
     for (unsigned z = 0; z < d; ++z)
         for (unsigned y = 0; y < d; ++y)
             for (unsigned x = 0; x < d; x += e)
@@ -43,15 +39,15 @@ static unsigned clamp_origin(int value, unsigned d)
     return value < 0 ? 0 : (unsigned)value > d - 16 ? d - 16 : (unsigned)value;
 }
 
-int vc_ng_screen_proxy(const uint8_t *src, unsigned d, unsigned e,
+int vc_ng_screen_proxy(const uint8_t *src, unsigned d,
                         const uint8_t *empty, uint8_t *proxy)
 {
-    if (!src || !proxy || d < 32 || !e || d % e) return -1;
+    if (!src || !proxy || d < 32 || d % 32) return -1;
     if (d == 32) {
         memcpy(proxy, src, 32 * 32 * 32);
         return 0;
     }
-    const unsigned nb = d / e;
+    const unsigned e=4, nb=d/4;
     const size_t blocks = (size_t)nb * nb * nb;
     size_t *occupied = NULL, occupied_count = 0;
     unsigned origins[8][3];

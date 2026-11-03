@@ -90,18 +90,22 @@ channel count (excluding its probability tables and states).
 Standalone scalar NCF1 retains its8-byte magic/length prefix, with no container.
 Data is uint8/lossless. Rectangular leaf limits remain X<=1024 and Y*Z<=65536,
 all extents32-aligned. Logical chunks may exceed leaf limits by subdivision.
-Explicit rectangular baseline encoding is an encoder option, not another format.
+Encoding uses only fast/medium/slow/slower presets on cubic leaves. Rectangular
+input volumes use the canonical cubic partition. Explicit plans must also
+specify cubic leaves. The reader still accepts rectangular leaves; no wire
+format capability has been removed.
 
 ## APIs and random range access
 
 C vc_partition_node and Python tuples use API axes:
 0/1/2 split Z/Y/X,3 split channels,4 leaf,
 5/6/7 repeat Z/Y/X,8 repeat channels.
-For repeats, cut is the repetition count. Rectangular is permitted only on
-leaves. These API axis values are deliberately distinct from wire tags.
+For repeats, cut is the repetition count. Nodes are `(axis, cut)` pairs;
+the former rectangular-baseline policy flag has been removed. These API axis
+values are deliberately distinct from wire tags.
 
 Example: three channels each with two Z regions and two X regions:
-`[(8,3,0),(5,2,0),(7,2,0),(4,0,0)]`.
+`[(8,3),(5,2),(7,2),(4,0)]`.
 This has four template nodes but twelve independently encoded leaves.
 
 The existing C/C++/Python index APIs recognize both magics:
@@ -132,7 +136,7 @@ ctest --test-dir /data/hendrik/compression_experiments/villa4/builds/delta3d-c-o
 
 Python regression coverage is in tests/test_indexed.py, alongside the existing
 test_python.py, test_modern.py and test_fallback.py suites. With the built native
-module loaded, all135tests pass. Native CTest6/6 passes; the sanitizer build
+module loaded, all 139 tests pass. Native CTest 7/7 passes; the sanitizer build
 exercises truncated/mutated indexes, repeat expansion and64-bit ranges.
 Framing-byte counts above are exact structural sizes, not throughput claims.
 No macOS/ARM hardware test was performed in this session.

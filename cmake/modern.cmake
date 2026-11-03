@@ -1,12 +1,10 @@
 # Shared native implementation; no dependency on Villa or Python.
-find_package(Threads REQUIRED)
 target_sources(vc_delta3d PRIVATE src/indexed_encode.c src/indexed_decode.c src/ng/ng_native_common.c src/ng/ng_native_encode.c src/ng/ng_native_decode.c
     src/ng/ng_presets.c src/ng/ng_frame_encode.c src/ng/ng_frame_decode.c src/ng/ng_thresholds.c src/ng/ng_screen.c src/ng/ng_predict.c
-    src/ng/ng_fit.c src/ng/ng_fast.c src/ng/ng_search.c src/ng/ng_medium.c src/ng/ng_stream.c src/ng/ng_rect.c
+    src/ng/ng_fit.c src/ng/ng_fast.c src/ng/ng_search.c src/ng/ng_medium.c src/ng/ng_stream.c
     src/ng/ng_select.c src/ng/ng_slow.c src/ng/selector.c src/ng/header.c)
 target_compile_definitions(vc_delta3d PRIVATE VC_DELTA3D_MODERN=1)
 target_include_directories(vc_delta3d PRIVATE src src/ng)
-target_link_libraries(vc_delta3d PRIVATE Threads::Threads)
 if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # ClangCL does not automatically link compiler-rt's CPU detection state
     # used by __builtin_cpu_supports in the SIMD dispatch paths.
@@ -18,7 +16,7 @@ if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_link_libraries(vc_delta3d PRIVATE "${VC_CLANG_BUILTINS}")
 endif()
 if(NOT MSVC)
-    target_compile_options(vc_delta3d PRIVATE $<$<COMPILE_LANGUAGE:C>:-std=gnu11> -ffp-contract=off)
+    target_compile_options(vc_delta3d PRIVATE $<$<COMPILE_LANGUAGE:C>:-std=gnu11>)
     target_link_libraries(vc_delta3d PRIVATE m)
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(vc_delta3d PRIVATE $<$<COMPILE_LANGUAGE:C>:/clang:-std=gnu11>)
@@ -38,7 +36,6 @@ foreach(dim IN ITEMS 32 64 128 256)
     endif()
     target_sources(vc_delta3d PRIVATE $<TARGET_OBJECTS:vc_ng_fixed${dim}>)
 endforeach()
-option(VC_DELTA3D_MODERN_SMOKE "Build no-dependency integration smoke test" OFF)
 if(VC_DELTA3D_BUILD_TESTS OR VC_DELTA3D_MODERN_SMOKE)
     add_executable(vc_delta3d_format_tests tests/test_format.c)
     target_include_directories(vc_delta3d_format_tests PRIVATE src/ng)

@@ -164,16 +164,16 @@ NB_MODULE(_codec, m)
         if(!ok)throw std::runtime_error("invalid indexed leaf");return toBytes(out);
     },"payload"_a,"leaf"_a);
     m.def("compress_indexed",[](nb::bytes raw,int z,int y,int x,int channels,bool last,const std::string&p,
-        const std::vector<std::array<std::uint32_t,3>>&plan){
+        const std::vector<std::array<std::uint32_t,2>>&plan){
         vc_delta3d::IndexedOptions options;options.preset=parsePredictor(p);
-        for(auto n:plan){if(n[0]>8||n[2]>1)throw std::invalid_argument("invalid partition node");
-            options.partition.push_back({vc_delta3d::SplitAxis(n[0]),n[1],bool(n[2])});}
+        for(auto n:plan){if(n[0]>8)throw std::invalid_argument("invalid partition node");
+            options.partition.push_back({vc_delta3d::SplitAxis(n[0]),n[1]});}
         std::vector<std::byte> out;auto src=bytesSpan(raw);
         {nb::gil_scoped_release release;out=vc_delta3d::compressIndexed(src,{z,y,x},channels,
             last?vc_delta3d::ChannelLayout::Last:vc_delta3d::ChannelLayout::First,options);}
         return toBytes(out);
     },"raw"_a,"z"_a,"y"_a,"x"_a,"channels"_a=1,"channels_last"_a=false,
-      "predictor"_a="fast","partition"_a=std::vector<std::array<std::uint32_t,3>>{});
+      "predictor"_a="fast","partition"_a=std::vector<std::array<std::uint32_t,2>>{});
 
     m.def(
         "compress",

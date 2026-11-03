@@ -33,18 +33,17 @@ static double uniform_cost(uint32_t counts[16][256], unsigned scale, size_t bloc
 {
     uint32_t selectors[256] = {0};
     selectors[0] = (uint32_t)(blocks * scale);
-    double cost = vc_ng_histogram_cost(selectors, 12, 1);
+    double cost = vc_ng_histogram_cost(selectors,12);
     for (unsigned k = 0; k < 16; ++k) {
         uint32_t scaled[256];
         for (unsigned j = 0; j < 256; ++j) scaled[j] = counts[k][j] * scale;
-        cost += vc_ng_histogram_cost(scaled, 12, 1);
+        cost += vc_ng_histogram_cost(scaled,12);
     }
     return cost / 8.;
 }
 
-static double metadata_cost(const vc_ng_fit *fit, const uint8_t *empty, size_t empty_size)
+static double metadata_cost(const vc_ng_fit *fit)
 {
-    (void)empty;(void)empty_size;
     vc_ng_model m={fit?fit->params:NULL,fit?fit->param_size:0};
     vc_ng_choice c={1,fit?0:255,0,{0,0}};
     if(fit)memcpy(c.weights,fit->weights,sizeof(c.weights));
@@ -87,7 +86,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     const uint8_t *sample = src;
     if (d > 32) {
         proxy = malloc(n);
-        if (!proxy || vc_ng_screen_proxy(src,d,4,full.count?full.empty:NULL,proxy)) goto done;
+        if (!proxy || vc_ng_screen_proxy(src,d,full.count?full.empty:NULL,proxy)) goto done;
         sample = proxy;
     }
     ng_current_geometry = (ng_geometry){(int)sd,(int)sd,(int)sd};
@@ -103,7 +102,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     for (unsigned m = 0; m < 12; ++m) {
         if (!statistics(candidate[m],screen.mask,n,activity,classes,thresholds,counts,histogram)) goto done;
         double cost = 0;
-        for (unsigned k = 0; k < 16; ++k) cost += vc_ng_histogram_cost(counts[k],12,1);
+        for (unsigned k = 0; k < 16; ++k) cost += vc_ng_histogram_cost(counts[k],12);
         screening[m] = cost;
     }
     /* Stable ascending predictor ID resolves equal histogram costs. */
@@ -127,13 +126,12 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
             if (p == option_count) options[option_count++] = ids[j];
         }
     }
-    if (ng_bank_empty_model(empty,sizeof(empty),&empty_size)) goto done;
     for (unsigned j = 0; j < option_count; ++j) {
         unsigned id = options[j];
         const vc_ng_fit *fit = id >= 12 ? &fits[(id-12)/12] : NULL;
         const uint8_t *s = fit ? fit->symbols : candidate[id];
         if (!statistics(s,screen.mask,n,activity,classes,thresholds,counts,histogram)) goto done;
-        double metadata = metadata_cost(fit,empty,empty_size);
+        double metadata = metadata_cost(fit);
         if (metadata < 0) goto done;
         costs[j] = uniform_cost(counts,scale,n/64) + metadata;
         if (costs[j] < costs[chosen]) chosen = j;
@@ -156,7 +154,6 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
                                 full.count?NULL:activity,full.count?NULL:histogram)) goto done;
             activity_ready = !full.count;
         }
-        if (ng_bank_empty_model(empty,sizeof(empty),&empty_size)) goto done;
     } else if (learned) {
         unsigned k = (chosen-12)/12;
         final_fit = fits[k];memset(&fits[k],0,sizeof(fits[k]));
@@ -170,14 +167,13 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     if (full.count) {
         for (size_t b = 0; b < full.blocks; ++b) if (full.empty[b]) selected[b] = 0;
         if (learned) {
-            const uint8_t *params[12];size_t sizes[12];const uint16_t *bases[12];
+            const uint8_t *params[]={final_fit.params};size_t sizes[]={final_fit.param_size};const uint16_t *bases[]={final_fit.base};
             uint8_t *outputs[24] = {0};
             for (unsigned m = 0; m < 12; ++m) {
-                params[m]=final_fit.params;sizes[m]=final_fit.param_size;bases[m]=final_fit.base;
                 outputs[m]=candidate[m];
             }
             outputs[12+predictor]=final_fit.symbols;
-            if (ng_bank_selected_symbols(12,params,sizes,bases,selected,src,outputs,symbols,activity)) goto done;
+            if (ng_bank_selected_symbols(1,params,sizes,bases,selected,src,outputs,symbols,activity)) goto done;
         } else {
             for (size_t i = 0; i < full_n; ++i) if (!full.mask[i]) symbols[i]=0;
             if (ng_activity_symbol_values(symbols,activity)) goto done;
@@ -198,8 +194,9 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
         ss=active_symbols;aa=active_activity;
     }
     if (!vc_ng_quantiles(histogram,16,thresholds) ||
-        !vc_ng_refine_thresholds(ss,aa,active_n,thresholds,16,NULL,NULL,0,1,1,64,1,final_thresholds) ||
+        !vc_ng_refine_thresholds(ss,aa,active_n,thresholds,16,NULL,NULL,0,1,1,final_thresholds) ||
         !vc_ng_classify(activity,full_n,final_thresholds,16,classes)) goto done;
+    if (!learned && ng_bank_empty_model(empty,sizeof(empty),&empty_size)) goto done;
     vc_ng_model model = {learned?final_fit.params:empty,learned?final_fit.param_size:empty_size};
     vc_ng_choice menu[3];unsigned remap[24],count=0;
     for (unsigned j=0;j<24;++j) remap[j]=255;

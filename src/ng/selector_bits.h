@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-/* Shared legacy selector bit layout. Callers validate sizes and IDs. */
+/* Shared current selector bit layout. Callers validate sizes and IDs. */
 static inline unsigned vc_selector_bits(unsigned choices) {
     unsigned bits=0;while((1u<<bits)<choices)++bits;return bits;
 }

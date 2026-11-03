@@ -2,9 +2,6 @@
 #define VC_DELTA_LEGACY_H
 #include <stdint.h>
 #include <stddef.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
 typedef struct {
     uint32_t shape[3], channels;
     unsigned element_size, quantization, layout, version, mask, has_mask;
@@ -18,7 +15,4 @@ int vc_legacy_encode(const uint8_t*, size_t, const uint32_t shape[3], unsigned e
                      unsigned quantization, uint32_t channels, unsigned layout,
                      uint8_t**, size_t*);
 int vc_legacy_decode(const uint8_t*, size_t, const uint8_t magic[4], uint8_t*, size_t);
-#ifdef __cplusplus
-}
-#endif
 #endif

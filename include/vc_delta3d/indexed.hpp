@@ -12,9 +12,6 @@ enum class SplitAxis : unsigned char { Z=0, Y=1, X=2, Channel=3, Leaf=4,
 struct PartitionNode {
     SplitAxis axis=SplitAxis::Leaf;
     std::uint32_t cut=0;
-    // Explicit opt-in to the documented rectangular mode504 baseline; this
-    // is NOT a silent substitution for one of the four cubic presets.
-    bool rectangularBaseline=false;
 };
 struct IndexedOptions {
     Predictor preset=Predictor::Fast;
@@ -41,7 +38,8 @@ std::optional<std::uint32_t> indexedHeaderSize(std::span<const std::byte> prefix
 // Validates tree coverage, geometry, codecs, offsets and exact object length.
 // Throws invalid_argument on malformed input. Does NOT fetch/decode payloads.
 ChunkIndex readIndex(std::span<const std::byte> header,std::uint64_t objectBytes);
-// Input is uint8 only. All spatial extents/cuts must be positive multiples32.
+// Input is uint8 only. Spatial extents/cuts are positive multiples of32.
+// Encoder leaves are cubic and use the selected preset; decoding also accepts rectangles.
 std::vector<std::byte> compressIndexed(std::span<const std::byte> input,
     std::array<int,3> shapeZYX,int channels,ChannelLayout layout,
     const IndexedOptions& options={});

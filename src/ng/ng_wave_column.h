@@ -1,10 +1,6 @@
 #pragma once
 /* Shared exact recurrence for native reconstruction and entropy integration. */
-#ifdef __cplusplus
-#define NG_WRESTRICT __restrict
-#else
 #define NG_WRESTRICT restrict
-#endif
 typedef struct {
     uint16_t pre[32],w0[32],w1[32],w2[32],feature[32],residual[32];
     int16_t constant[32],left[32],clamp[32],lo[32],hi[32];

@@ -31,7 +31,8 @@ There is no streaming state, adaptive partition search, tree entropy coder,
 LPC, tooslow, alternative fitting/refinement or user-selectable decoder trial.
 Fixed-geometry instantiations share the SAME C kernels rather than copies.
 The completed cleanup and validation are recorded in
-[`experiments/final_cleanup.md`](../../experiments/final_cleanup.md).
+[`experiments/preset_only_cleanup.md`](../../experiments/preset_only_cleanup.md),
+following [`experiments/final_cleanup.md`](../../experiments/final_cleanup.md).
 
 ## Source map
 
@@ -42,7 +43,6 @@ The completed cleanup and validation are recorded in
 - `ng_frame_encode.c`, `ng_frame_decode.c`: separate leaf framing paths.
 - `selector.c`: only the retained whole-map context/LZ choice, shared scalar rANS.
 - `header.c`: one schema walk and pooled numerical header compaction.
-- `ng_rect.c`: rectangular search emitting the same NCF1 frame.
 - `ng_stream.c`: compact tables around the shared bulk rANS implementation.
 - `ng_kernel_fit.h`, `ng_kernel_encode.h`: live NG fitting and encoder kernels.
 - `ng_kernel_decode.h`: live entropy and reconstruction kernels.
@@ -53,6 +53,11 @@ The completed cleanup and validation are recorded in
 - `ng_kernels.h`: combined include for fixed-geometry instantiation only.
 - `ng_fixed.c`: compile-time geometry specializations (32/64/128/256).
 - `ng_bank_reconstruct.h` and vector headers: integrated wavefront decoder.
+
+Rectangular input volumes are partitioned into cubic leaves; each leaf uses
+the selected preset. There is no alternate rectangular encoder policy. The
+reader and low-level frame machinery still support rectangular leaves and
+all documented block sizes.
 
 Public framing/dispatch lives in `../api.c`; compact NGC2 / extended NGX2
 indexing is split between `../indexed_encode.c` and `../indexed_decode.c`, with

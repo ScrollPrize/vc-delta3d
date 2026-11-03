@@ -53,7 +53,6 @@ typedef enum {
 VCN_INLINE int32_t vcn_clamp32(int64_t v, int32_t lo, int32_t hi) {
   return v < lo ? lo : (v > hi ? hi : (int32_t)v);
 }
-VCN_INLINE uint8_t vcn_u8(int32_t v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }
 static inline void vcn_wr16(uint8_t *p, uint32_t v) {
   p[0] = (uint8_t)v;
   p[1] = (uint8_t)(v >> 8);

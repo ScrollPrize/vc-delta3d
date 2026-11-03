@@ -23,8 +23,9 @@ typedef struct {
  * 5/6/7/8 repeat Z/Y/X/channel. Repeat cut is the repetition count (>=2),
  * followed by ONE subtree reused in equally sized, disjoint regions.
  * Spatial cuts must be positive multiples of 32. An empty plan selects the
- * canonical channel/cubic partition. Rectangular is an encoder policy only. */
-typedef struct { unsigned axis; uint32_t cut; unsigned rectangular; } vc_partition_node;
+ * canonical channel/cubic partition. Explicit encoder leaves must be cubic;
+ * decoding still supports rectangular leaves. */
+typedef struct { unsigned axis; uint32_t cut; } vc_partition_node;
 int vc_indexed_encode(const uint8_t*, size_t, const uint32_t shape[3], uint32_t channels,
                       unsigned layout, unsigned preset, const vc_partition_node*, size_t nodes,
                       uint8_t**, size_t*);

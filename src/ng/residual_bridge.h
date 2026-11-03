@@ -4,19 +4,7 @@
 #include "ng_geometry.h"
 #include "ng_symbol_mapping.h"
 
-#ifndef NG_BLOCK_DIM
-#define NG_BLOCK_DIM 128
-#endif
-#ifdef __cplusplus
-extern "C" {
-#endif
-#ifdef __cplusplus
-extern thread_local NG_TLS_CONSTINIT unsigned ng_choice_edge;
-extern thread_local NG_TLS_CONSTINIT int ng_disable_avx512;
-#else
 extern _Thread_local unsigned ng_choice_edge;
-extern _Thread_local int ng_disable_avx512;
-#endif
 void* ng_fit_session_create(void);
 void ng_fit_session_destroy(void*);
 int ng_feature_prepare_cached(void*,const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
@@ -28,7 +16,6 @@ void ng_causal_destroy(void* state);
 int ng_plain_prepare_masked(const uint8_t*,const int*,const uint8_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
 int ng_feature_prepare_masked(const uint8_t*,const int*,const uint8_t*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
 int ng_feature_prepare_activity(const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint16_t*,uint32_t*);
-double ng_hist_cost(const uint32_t*,int);
 int ng_wave_encode(const uint8_t*,size_t,const uint8_t*,const uint8_t*,uint8_t*,size_t,size_t*);
 /* Per-call decoder state; no experimental controls or nested TLS overrides. */
 typedef struct {
@@ -45,28 +32,10 @@ int ng_bank_empty_model(uint8_t*,size_t,size_t*);
 size_t ng_write_freq_table(uint8_t*,const uint16_t*);
 int ng_read_freq_table(const uint8_t*,size_t,uint16_t*,size_t*);
 int ng_read_freq_table_scaled(const uint8_t*,size_t,uint16_t*,unsigned,size_t*);
-int ng_block_symbols(const uint8_t*,size_t,const uint8_t*,const uint8_t*,const uint16_t*,const uint8_t* const*,uint8_t*,uint8_t*);
 double ng_hist_cost_logs(const uint32_t*,int,const double*);
 int ng_set_isa_limit(int); /* 0 automatic, 256 excludes AVX-512, per thread */
 int ng_activity_symbol_values(const uint8_t*,uint16_t*);
 int ng_activity_symbol_histogram(const uint8_t*,uint16_t*,uint32_t*);
-#ifdef __cplusplus
-}
-#endif
-/* Exact causal predictor equivalent to upstream deltaFilter, including edges. */
-static inline uint8_t delta_predict_xyz(const uint8_t* v,size_t i,unsigned mask,unsigned x,unsigned y,unsigned z,size_t row,size_t plane) {
-    if(!x)mask&=~1u;if(!y)mask&=~2u;if(!z)mask&=~4u;
-    switch(mask) {
-    case 0:return 0;
-    case 1:return v[i-1];
-    case 2:return v[i-row];
-    case 3:return (uint8_t)(v[i-1]+v[i-row]-v[i-row-1]);
-    case 4:return v[i-plane];
-    case 5:return (uint8_t)(v[i-1]+v[i-plane]-v[i-plane-1]);
-    case 6:return (uint8_t)(v[i-row]+v[i-plane]-v[i-plane-row]);
-    default:return (uint8_t)(v[i-1]+v[i-row]+v[i-plane]-v[i-row-1]-v[i-plane-1]-v[i-plane-row]+v[i-plane-row-1]);
-    }
-}
 /* Shared exact directional bases. Clamping is before modulo conversion, not
  * clamping the wrapped byte. Missing selected axes retain the legacy fallback. */
 typedef struct {int constant,left,clamp,lo,hi;} ng_base_parts;

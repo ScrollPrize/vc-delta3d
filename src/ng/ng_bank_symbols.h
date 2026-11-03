@@ -2,8 +2,8 @@
 static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,const size_t* sizes,
     const uint16_t* const* base,const uint8_t* choices,const uint8_t* src,
     uint8_t* const* candidates,uint8_t* symbols,uint16_t* activity,int selected_only) {
-    if(count<12||count>48||count%12)return -1;
-    vcn_lc_par* p[48]={0};uint8_t* e=calloc(VCN_LC_NB,1);int rc=-1;
+    if(count<1||count>4)return -1;
+    vcn_lc_par* p[4]={0};uint8_t* e=calloc(VCN_LC_NB,1);int rc=-1;
     if(!e)return -1;
     for(unsigned m=0;m<count;m++){const uint8_t* cur=params[m];
         if(!cur&&!sizes[m])continue;
@@ -23,23 +23,24 @@ static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,cons
         uint8_t needed[48]={0};
         if(selected_only)for(unsigned x=0;x<VCN_LC_D;x+=edge){
             unsigned m=row_choices[x];
-            if(m>=12+count)goto done;
+            if(m>=12+12*count)goto done;
             if(m>=12)needed[m-12]=1;
         }
-        for(unsigned m=0;m<count;m++){
-            if(!p[m])continue;
+        for(unsigned m=0;m<12*count;m++){
+            unsigned k=m/12;
+            if(!p[k])continue;
             // A compact screened menu need not materialize unused inputs.
             if(!candidates[12+m])continue;
             if(selected_only&&!needed[m])continue;
-            if(m&&shared&&base[m]==base[0]&&candidates[12+m]==candidates[12]&&(!selected_only||needed[0]))continue;
+            if(m&&shared&&base[k]==base[0]&&candidates[12+m]==candidates[12]&&(!selected_only||needed[0]))continue;
             uint16_t q[VCN_LC_D];uint8_t cl[VCN_LC_D],err[VCN_LC_D];
-            if(shared){for(int x=0;x<VCN_LC_D;x++)q[x]=(uint16_t)(base[m][o+x]+bias[x]);}
-            else {memcpy(q,base[m]+o,sizeof(q));VCN_LC_CLS(e,ri,p[m],q,cl);}
+            if(shared){for(int x=0;x<VCN_LC_D;x++)q[x]=(uint16_t)(base[k][o+x]+bias[x]);}
+            else {memcpy(q,base[k]+o,sizeof(q));VCN_LC_CLS(e,ri,p[k],q,cl);}
             VCN_LC_SYMS(q,src+o,candidates[12+m]+o,err);
         }
         for(unsigned x=0;x<VCN_LC_D;x+=edge){
             unsigned m=row_choices[x];
-            if(m>=12+count||!candidates[m]||(m>=12&&!p[m-12]))goto done;
+            if(m>=12+12*count||!candidates[m]||(m>=12&&!p[(m-12)/12]))goto done;
             memcpy(symbols+o+x,candidates[m]+o+x,edge);
             for(unsigned j=0;j<edge;j++)e[ri+x+j]=(symbols[o+x+j]+1u)>>1;
         }

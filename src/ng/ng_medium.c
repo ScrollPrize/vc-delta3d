@@ -26,16 +26,16 @@ typedef struct {
 
 static int evaluate(medium_state *s,int selected_only)
 {
-    const uint8_t *params[24];size_t sizes[24];const uint16_t *bases[24];
+    const uint8_t *params[2];size_t sizes[2];const uint16_t *bases[2];
     uint8_t *outputs[36]={0};
-    for(unsigned k=0;k<24;++k){
-        const vc_ng_fit *f=&s->fits[k>=12&&s->assisted?1:0];
+    for(unsigned k=0;k<2;++k){
+        const vc_ng_fit *f=&s->fits[k&&s->assisted?1:0];
         params[k]=f->params;sizes[k]=f->param_size;bases[k]=f->base;
     }
     for(unsigned k=0;k<3;++k)outputs[s->ids[k]]=s->candidate[s->ids[k]];
     for(size_t b=0;b<s->blocks;++b)
         s->canonical[b]=s->zero.count&&s->zero.empty[b]?0:(uint8_t)s->ids[s->choices[b]];
-    return (selected_only?ng_bank_selected_symbols:ng_bank_symbols)(24,params,sizes,bases,
+    return (selected_only?ng_bank_selected_symbols:ng_bank_symbols)(2,params,sizes,bases,
         s->canonical,s->src,outputs,s->symbols,s->activity)==0;
 }
 
@@ -87,7 +87,7 @@ static int screen(medium_state *s,unsigned *singleton)
     vc_ng_fit plain={0},fitted={0};
     vc_ng_distribution stats;
     double rank[12],best=DBL_MAX;unsigned top[2]={0,0};int ok=0;
-    if(!proxy||!activity||vc_ng_screen_proxy(s->src,s->d,4,s->zero.count?s->zero.empty:NULL,proxy))goto done;
+    if(!proxy||!activity||vc_ng_screen_proxy(s->src,s->d,s->zero.count?s->zero.empty:NULL,proxy))goto done;
     ng_current_geometry=(ng_geometry){d,d,d};
     if(s->zero.count&&!vc_ng_scan(&zeros,proxy,d))goto done;
     for(unsigned m=0;m<12;++m){fixed[m]=malloc(n);if(!fixed[m])goto done;}

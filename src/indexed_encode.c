@@ -3,7 +3,7 @@ static int plan_tree(domain root,const vc_partition_node*plan,size_t nodes,node*
     domain*stack=NULL;node*t=NULL;size_t cap=0,tc=0,pending=0,used=0,step=0;
     if(!vc_reserve(&stack,&cap,1,sizeof(*stack)))goto fail;stack[pending++]=root;
     while(pending){
-        domain d=stack[--pending];vc_partition_node p={4,0,0};
+        domain d=stack[--pending];vc_partition_node p={4,0};
         if(nodes){if(step>=nodes)goto fail;p=plan[step++];}
         else if(d.channels>1){p.axis=8;p.cut=d.channels;}
         else if(!cube(d.shape)||!leaf_shape(d.shape)){
@@ -11,11 +11,11 @@ static int plan_tree(domain root,const vc_partition_node*plan,size_t nodes,node*
             p.cut=(d.shape[p.axis]/64)*32;
         }
         if(p.axis>8||!vc_reserve(&t,&tc,used+1,sizeof(*t)))goto fail;
-        node n={p.axis==4?8:p.axis>4?p.axis-1:p.axis,p.rectangular,p.cut,0};t[used++]=n;
+        node n={p.axis==4?8:p.axis>4?p.axis-1:p.axis,p.cut,0};t[used++]=n;
         if(n.tag==8){
-            if(p.cut||d.channels!=1||!leaf_shape(d.shape)||(!p.rectangular&&!cube(d.shape)))goto fail;
+            if(p.cut||d.channels!=1||!leaf_shape(d.shape)||!cube(d.shape))goto fail;
         }else{
-            domain a,b;uint32_t k;if(p.rectangular||!children(d,&n,&a,&b,&k))goto fail;
+            domain a,b;uint32_t k;if(!children(d,&n,&a,&b,&k))goto fail;
             if(!vc_reserve(&stack,&cap,pending+2,sizeof(*stack)))goto fail;
             if(n.tag<4)stack[pending++]=b;stack[pending++]=a;
         }
@@ -55,8 +55,7 @@ int vc_indexed_encode(const uint8_t*input,size_t input_size,const uint32_t shape
         if(payload.size>SIZE_MAX-131072||n>(SIZE_MAX-payload.size-131072)/4||
            !vc_reserve(&payload.data,&payload.capacity,payload.size+4*n+131072,1))goto fail;
         size_t bytes=0;uint8_t*dst=payload.data+payload.size;
-        int rc=l->codec?vc_ng_rect_encode(src,l->shape[2],l->shape[1],l->shape[0],dst,payload.capacity-payload.size,&bytes):
-            vc_ng_preset_encode(src,l->shape[0],preset-3,dst,payload.capacity-payload.size,&bytes);
+        int rc=vc_ng_preset_encode(src,l->shape[0],preset-3,dst,payload.capacity-payload.size,&bytes);
         if(rc||bytes<8||bytes>payload.capacity-payload.size||memcmp(dst,"NCF1",4))goto fail;
         /* Embedded leaves share the container's codec identity. */
         memmove(dst,dst+4,bytes-4);l->length=bytes-4;payload.size+=bytes-4;

@@ -43,21 +43,22 @@ int main(void) {
     uint8_t *frame;size_t bytes;opt.preset=(vc_preset)2;
     assert(!vc_compress(src,n,&opt,&frame,&bytes));opt.preset=(vc_preset)7;
     assert(!vc_compress(src,n,&opt,&frame,&bytes));
-    /* Explicit noncubic leaf uses the same NCF1 grammar and kernels. */
+    /* Noncubic chunks use cubic leaves with the requested preset. */
     const uint32_t shapes[3][3]={{32,32,64},{32,64,32},{64,32,32}};
-    vc_partition_node leaf={4,0,1};
+    vc_partition_node leaf={4,0};
     for(unsigned k=0;k<3;k++){
-        assert(vc_indexed_encode(src,2*n,shapes[k],1,0,VC_FAST,&leaf,1,&frame,&bytes));
+        assert(!vc_indexed_encode(src,2*n,shapes[k],1,0,VC_FAST,&leaf,1,&frame,&bytes));
+        assert(vc_indexed_encode(src,2*n,shapes[k],1,0,VC_FAST,NULL,0,&frame,&bytes));
         assert(vc_decompress(frame,bytes,decoded,2*n)&&!memcmp(src,decoded,2*n));
-        vc_chunk_index idx;assert(vc_index_read(frame,bytes,bytes,&idx)&&idx.leaf_count==1);
+        vc_chunk_index idx;assert(vc_index_read(frame,bytes,bytes,&idx)&&idx.leaf_count==2);
         vc_indexed_leaf*l=idx.leaves;
-        assert(vc_indexed_leaf_decode(frame+l->offset,(size_t)l->length,l,decoded,2*n)&&!memcmp(src,decoded,2*n));
+        assert(vc_indexed_leaf_decode(frame+l->offset,(size_t)l->length,l,decoded,n));
         assert(!vc_decompress(frame+l->offset,(size_t)l->length,decoded,2*n));
         vc_index_free(&idx);
         vc_free(frame);
     }
     /* Repeated channel + spatial templates, bounded hostile parsing. */
-    vc_partition_node repeat[]={{8,2,0},{7,2,0},{4,0,0}};
+    vc_partition_node repeat[]={{8,2},{7,2},{4,0}};
     uint32_t rs[3]={32,32,64};
     assert(vc_indexed_encode(src,4*n,rs,2,0,VC_FAST,repeat,3,&frame,&bytes));
     assert(vc_decompress(frame,bytes,decoded,4*n)&&!memcmp(src,decoded,4*n));

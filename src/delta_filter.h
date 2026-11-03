@@ -4,9 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Internal primitives: callers validate shape products and buffer sizes.
  * Axis bits are x=1, y=2, z=4. Arithmetic wraps at the element width. */
@@ -19,7 +16,4 @@ unsigned vc_delta_select_mask(const uint8_t*, size_t z, size_t y, size_t x);
 void vc_delta_quantize_u8(uint8_t*, size_t count, int width);
 void vc_delta_quantize_u16(uint16_t*, size_t count, int width);
 
-#ifdef __cplusplus
-}
-#endif
 #endif

@@ -575,3 +575,76 @@ accepted retaining the cleanup and set 0.5% as the future tolerance. Restored
 all production source to e0c855e; retained monitoring tooling and reports only.
 See experiments/cleanup_attribution.md. Do not describe the small earlier
 regression as a proven source-level trade-off or solely as system contention.
+
+## Follow-up source audit after c158df7
+
+Committed the benchmark tooling/report first, then performed a read-only
+production-source audit (symbol references, dispatch, retained options and
+shared helpers). No production modifications in this pass. Existing Release
+CTest remains 7/7. Findings:
+
+- Dead internal helpers: delta_predict_xyz in residual_bridge.h, vcn_u8 in
+  ng_kernel_common.h, and vc_ng_frame_dimension (definition + declaration;
+  replaced by shape inspection). No callers in src/include/python/tests/benchmark.
+- Threshold encoder retains unsupported-by-current-callers choices: histogram
+  fast=0 (all callers pass 1), raw-residual symbols=0 (all pass 1), and grid=0
+  local candidate generation (all callers pass 64). The global/coordinate
+  distinction IS live and must remain. Decoder grammar is unrelated to these
+  search options.
+- metadata_cost in ng_fast.c ignores its empty-model pointer and size arguments.
+  The final encoder still needs an empty model, but these arguments do not.
+- Private C++ TLS/extern-C/restrict shims remain after the C port; actual C++
+  wrappers consume public C headers, not the internal kernel headers. Keep
+  public C++ support; private compatibility syntax can be reduced separately.
+- residual_bridge.h redeclares ng_disable_avx512 and NG_BLOCK_DIM already
+  provided by ng_geometry.h. Several preset prototypes are repeated manually.
+  CMake repeats VC_DELTA3D_MODERN_SMOKE and floating-point contraction options.
+- ng_rect.c is a live 69-line alternative encoder policy: explicit rectangular
+  leaves use its fixed NG + delta menu, independent of the requested preset.
+  indexed_encode.c selects it via leaf.codec; INDEXED_FORMAT.md documents it.
+  Default plans split noncubes into cubic leaves and use the selected preset.
+  Consolidation would require generalizing the current preset searches to
+  rectangular geometry, not deleting rectangular format support.
+- Encoder symbol evaluation still builds replicated 12-slot-per-model pointer
+  arrays in fast/medium/slow. Unlike the removed decoder replication, these are
+  live. A shared model+choice descriptor is a possible measured follow-up.
+- Two real policy distinctions must not be mistaken for duplicate code:
+  +1 versus +0.5 histogram smoothing, and scalar/NEON/AVX2/AVX512 kernels.
+  The selector context/LZ coder and bulk rANS also serve different stream/state
+  layouts. Fixed-geometry kernels instantiate shared source, not copied files.
+- No retained LPC, tree entropy, streaming adaptation, obsolete NG frame
+  decoder, or Zstd dependency found in production. selector_bits.h's "legacy"
+  comment is stale terminology for packing used by the current selector codec.
+
+Conclusion: the previous cleanup-complete statement was too broad. The planned
+pass was complete, but these additional remnants can still be reduced. Small
+dead-code/internal-policy removals should precede any rectangular encoder or
+model-descriptor redesign; measure live-path changes under contention monitoring.
+
+## Preset-only encoder removal pass
+
+Implemented all follow-up audit removals on user request. Deleted the alternate
+rectangular encoder and its private symbol evaluator. Rectangular logical
+chunks use preset-encoded cubic leaves; explicit encoder leaves must be cubic.
+Removed the rectangular policy flag from partition nodes (Python pairs now),
+while retaining full rectangular reader/low-level framing support with direct
+regression tests. Removed dead helpers, private C++ shims, unused threshold and
+occupancy alternatives, redundant declarations/CMake settings and empty-model
+work. Encoder model parsing now takes one descriptor per fitted model, not
+twelve identical copies. Real ISA/numerical policy distinctions are retained.
+
+Production size: 7,759 -> 7,540 lines, 82 -> 81 files. Release, portable and
+ASan/UBSan CTest pass 7/7 each; Python passes 139 tests. Final corpus parity:
+576/576 lossless and byte-identical to the prior baseline. Balanced eight-repeat
+native decode comparison is within 0.5% for every preset (-0.15% to +0.33%).
+Measured CPU/SMT contention is low. Three-repeat encoder comparison is complete:
+fast +4.35%, medium +2.94%, slow +0.00%, slower +0.05% overall. All repeated
+frames remain identical. The post-encode Python-wrapped decode measurements
+differ from isolated native timings, so a second balanced native comparison is
+included rather than attributing that discrepancy to a source edit without proof.
+That repeat also passes the 0.5% tolerance for all four presets (-0.32% to
++0.28%). Cleanup is complete; only supported format/ISA paths and the required
+legacy Delta3D fallback remain. No pending experiment or running benchmark.
+
+Report: experiments/preset_only_cleanup.md. Raw validation and monitored runs:
+/data/hendrik/compression_experiments/villa4/encoder_speed/preset_only_cleanup_20261103/.
