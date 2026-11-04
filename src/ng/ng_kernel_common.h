@@ -547,8 +547,10 @@ static int vcn_lc_read_table(const uint8_t **pp, const uint8_t *end, uint16_t *f
 }
 static int vcn_lc_read_tables(const uint8_t **p,const uint8_t *end,uint32_t *T,int K,uint32_t M) {
   for(int k=0;k<K;k++) {
-    uint16_t fr[256];
-    if(vcn_lc_read_table(p,end,fr,M))return -1;
+    uint16_t fr[256];uint32_t total=0;
+    if(end-*p<512)return -1;
+    for(unsigned s=0;s<256;s++,*p+=2){fr[s]=(uint16_t)vcn_rd16(*p);total+=fr[s];}
+    if(total!=M)return -1;
     if(!T)continue; /* Validate/skip metadata without constructing decode tables. */
     uint32_t cum=0,*Tk=T+(size_t)k*M;
     for(unsigned s=0;s<256;s++) {

@@ -3,6 +3,7 @@
  * or frequency tables. No compatibility representations, XOR, RLE or packing
  * alternatives. Exact log ranges retain all low bits. */
 #include "header.h"
+#include "ng_frame.h"
 #include "buffer.h"
 #include "ng_stream.h"
 #include "residual_bridge.h"
@@ -106,7 +107,7 @@ static int schema(walk*w,int shapes){
     unsigned x=field(w,4),y=field(w,4),z=field(w,4),mode=field(w,4),nm=field(w,4),nc=field(w,4);
     (void)field(w,4);unsigned edge=mode>>8;
     if(!w->input.ok||!ng_geometry_valid(x,y,z)||(mode&255)>1||nm>4||!nc||nc>60||
-       (edge!=2&&edge!=4&&edge!=8&&edge!=16&&edge!=32))return 0;
+       !vc_ng_edge_valid(edge))return 0;
     for(unsigned m=0;m<nm;m++)if(!model(w,shapes))return 0;
     unsigned banks=1;
     for(unsigned i=0;i<nc;i++){
@@ -114,7 +115,7 @@ static int schema(walk*w,int shapes){
         if(w->decode){if(!vc_buffer_put(&w->output,0,1))return 0;}
         else if(vc_get(&w->input,1))return 0;
         unsigned a=field(w,4),c=field(w,4);
-        if(p>12||(m!=255&&m>=nm)||b>=16||(p==12&&(m!=255||a||c)))return 0;
+        if(!vc_ng_choice_valid(p,m,b,a,c,nm))return 0;
         if(banks<=b)banks=b+1;
     }
     unsigned entropy=w->decode?vc_varget(&w->input,UINT32_MAX):w->input.i<w->input.n;
@@ -146,20 +147,12 @@ static int schema(walk*w,int shapes){
         }
         for(unsigned k=0;k<K;k++){
             if(shapes){if(!record(w->a,NULL,512))return 0;}
-            else if(w->decode){
-                uint16_t freq[256];uint8_t compact[514];
-                if(w->record>=w->a->count)return 0;
-                const uint8_t*p=w->a->words.data+w->a->at[w->record++];
-                unsigned sum=0;
-                for(unsigned j=0;j<256;j++){freq[j]=(uint16_t)(p[2*j]|(unsigned)p[2*j+1]<<8);sum+=freq[j];}
+            else{
+                size_t at=w->decode?w->output.size:w->input.i;
+                if(!numerical(w,512))return 0;
+                const uint8_t*p=(w->decode?w->output.data:w->input.p)+at;unsigned sum=0;
+                for(unsigned j=0;j<256;j++)sum+=p[2*j]|(unsigned)p[2*j+1]<<8;
                 if(sum!=(1u<<cfg[5]))return 0;
-                size_t bytes=ng_write_freq_table(compact,freq);
-                if(!vc_buffer_append(&w->output,compact,bytes))return 0;
-            }else{
-                uint16_t freq[256];uint8_t raw[512];size_t used=0;
-                if(ng_read_freq_table_scaled(w->input.p+w->input.i,w->input.n-w->input.i,freq,1u<<cfg[5],&used))return 0;
-                w->input.i+=used;for(unsigned j=0;j<256;j++){raw[2*j]=(uint8_t)freq[j];raw[2*j+1]=(uint8_t)(freq[j]>>8);}
-                if(!record(w->a,raw,512))return 0;
             }
         }
     }

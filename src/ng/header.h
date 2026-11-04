@@ -4,7 +4,8 @@
 #include <stdint.h>
 /* Runtime header: seven LE u32s (x,y,z,mode|edge<<8,models,choices,
  * selector bytes), models in the native parameter layout (sizes inferred),
- * 12-byte menu entries, then an optional native entropy header.
+ * 12-byte menu entries, then optional entropy parameters and dense LE u16
+ * frequencies (256 per class). No compact-table reserialization in decoding.
  * This is an internal representation, NOT a historical frame decoder.
  * Wire controls derive all array shapes; one pooled numeric stream follows.
  * Allocated results belong to the caller (free). */

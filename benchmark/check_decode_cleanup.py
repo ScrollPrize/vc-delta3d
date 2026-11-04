@@ -23,6 +23,7 @@ p.add_argument('--export',action='store_true')
 p.add_argument('--repetitions',type=int,default=8)
 p.add_argument('--cpu',type=int,default=64)
 p.add_argument('--group',help='Optional isolation subset; final validation uses all groups')
+p.add_argument('--preset',choices=['fast','medium','slow','slower'],help='Isolate a preset when checking a borderline regression')
 p.add_argument('--encode',action='store_true',help='Alternate native encoder calls instead of decoder calls')
 a=p.parse_args()
 root=Path('/data/hendrik/compression_experiments/villa4')
@@ -32,6 +33,7 @@ def load(name,path):
     m=importlib.util.module_from_spec(s);sys.modules[name]=m;s.loader.exec_module(m);return m
 rows=[json.loads(s) for s in (root/'encoder_speed/final_cleanup_20261103/speed_before.jsonl').read_text().splitlines()]
 if a.group:rows=[r for r in rows if r['group']==a.group]
+if a.preset:rows=[r for r in rows if r['preset']==a.preset]
 def frame_path(r):return a.frames/(r['encoded_hash']+'.bin')
 def raw(r):return (root/'encoder_speed/header_clean_presets_20261103/raw'/(r['sha256']+'.raw')).read_bytes()
 if a.export:
@@ -85,5 +87,6 @@ else:
     data=[json.loads(s) for s in a.output.read_text().splitlines()]
     for preset in ['fast','medium','slow','slower']:
         rs=[r for r in data if r['preset']==preset]
+        if not rs:continue
         speeds=[2*len(rs)/sum(statistics.median(r[k]) for r in rs) for k in ['before','after']]
         print(preset,*(round(x,1) for x in speeds),f'{100*(speeds[1]/speeds[0]-1):+.2f}%')

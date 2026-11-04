@@ -68,7 +68,7 @@ int vc_ng_frame_encode_shape(unsigned x,unsigned y,unsigned z,unsigned edge,unsi
     const uint16_t *thresholds,unsigned K,const uint8_t *classes,uint8_t **out,size_t *out_size) {
     if(!out || !out_size) return 0;
     *out=NULL;*out_size=0;
-    if(!ng_geometry_valid(x,y,z) || (edge!=2&&edge!=4&&edge!=8&&edge!=16&&edge!=32) || mode>1 ||
+    if(!ng_geometry_valid(x,y,z) || !vc_ng_edge_valid(edge) || mode>1 ||
        nm>4 || (nm&&!models) || !nc || nc>60 || !menu || !selectors || K<2 || K>32) return 0;
     vc_buffer header={0},params={0},result={0};
     uint8_t *cls=NULL,*entropy=NULL,*compressed=NULL,*packed=NULL;
@@ -78,8 +78,7 @@ int vc_ng_frame_encode_shape(unsigned x,unsigned y,unsigned z,unsigned edge,unsi
     if(!vc_selector_encode(selectors,count,&packed,&selector_bytes)||selector_bytes>UINT32_MAX)goto done;
     for(unsigned i=0;i<nc;++i) {
         const vc_ng_choice *c=&menu[i];
-        if(c->predictor>12 || (c->model!=255&&c->model>=nm) || c->entropy>=16 ||
-           (c->predictor==12&&(c->model!=255||c->weights[0]||c->weights[1]))) goto done;
+        if(!vc_ng_choice_valid(c->predictor,c->model,c->entropy,c->weights[0],c->weights[1],nm)) goto done;
         if(banks<=c->entropy) banks=c->entropy+1;
     }
     if(K*banks>128) goto done;

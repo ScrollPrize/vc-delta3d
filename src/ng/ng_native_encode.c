@@ -29,41 +29,27 @@ static int ng_config(const int* a,vcn_lc_cfg* cf) {
     *cf=(vcn_lc_cfg){a[0],a[1],a[2],a[3],VCN_LC_TB,a[4],a[5]};return 0;
 }
 
-int ng_feature_prepare_masked(const uint8_t* src,const int* config,const uint8_t* feature,const uint8_t* mask,int32_t* weights,
-    uint8_t* params,size_t cap,size_t* n,uint8_t* sy,uint8_t* cl,uint16_t* predictions){
-    vcn_lc_cfg cf;if(ng_config(config,&cf)||!src||!feature||!weights)return -1;
-    cf.fit_feature=feature;cf.fit_mask=mask;cf.export_feature_weights=weights;cf.export_prediction=predictions;
-    return ng_encode_core(src,&cf,params,cap,n,sy,cl);
-}
-int ng_plain_prepare_masked(const uint8_t*src,const int*config,const uint8_t*mask,
-    uint8_t*params,size_t cap,size_t*n,uint8_t*sy,uint8_t*cl,uint16_t*predictions){
-    vcn_lc_cfg cf;if(ng_config(config,&cf)||!src)return -1;
-    cf.fit_mask=mask;cf.export_prediction=predictions;
-    return ng_encode_core(src,&cf,params,cap,n,sy,cl);
-}
-
-int ng_feature_prepare_activity(const uint8_t*src,const int*config,const uint8_t*feature,int32_t*weights,
-    uint8_t*params,size_t cap,size_t*n,uint8_t*sy,uint16_t*activity,uint32_t*histogram){
-    vcn_lc_cfg cf;if(ng_config(config,&cf)||!src||!feature||!weights||!activity||!histogram)return -1;
-    cf.fit_feature=feature;cf.export_feature_weights=weights;
-    cf.export_activity=activity;cf.export_activity_histogram=histogram;
-    return ng_encode_core(src,&cf,params,cap,n,sy,NULL);
-}
-
 void* ng_fit_session_create(void){return calloc(1,sizeof(ng_fit_session));}
 void ng_fit_session_destroy(void*ptr){
     ng_fit_session*s=ptr;if(!s)return;
     for(int i=0;i<2;i++)ng_fit_bank_clear(s->banks+i);
     free(s->padded);free(s);
 }
-int ng_feature_prepare_cached(void*ptr,const uint8_t*src,const int*config,const uint8_t*feature,int32_t*weights,
-    uint8_t*params,size_t cap,size_t*n,uint8_t*sy,uint8_t*cl,uint16_t*predictions){
-    ng_fit_session*s=ptr;vcn_lc_cfg cf;
-    if(!s||ng_config(config,&cf)||!src||!feature||!weights)return -1;
-    const int dims[3]={NG_X,NG_Y,NG_Z};
-    if(s->source&&(s->source!=src||memcmp(s->config,config,sizeof(s->config))||memcmp(s->dims,dims,sizeof(dims))))return -1;
-    s->source=src;memcpy(s->config,config,sizeof(s->config));memcpy(s->dims,dims,sizeof(dims));
-    cf.fit_feature=feature;cf.export_feature_weights=weights;cf.export_prediction=predictions;cf.fit_session=s;
+/* One preparation path; cached fitting and fused activity remain optional
+ * outputs of the same kernel, not separate encoder implementations. */
+int ng_prepare(const uint8_t*src,const int*config,const uint8_t*feature,const uint8_t*mask,void*session,int32_t*weights,
+    uint8_t*params,size_t cap,size_t*n,uint8_t*sy,uint8_t*cl,uint16_t*predictions,uint16_t*activity,uint32_t*histogram){
+    ng_fit_session*s=session;vcn_lc_cfg cf;
+    if(ng_config(config,&cf)||!src||(feature&&!weights)||
+       (s&&(!feature||mask||activity))||(activity&&(!feature||mask||!histogram)))return -1;
+    if(s){
+        const int dims[3]={NG_X,NG_Y,NG_Z};
+        if(s->source&&(s->source!=src||memcmp(s->config,config,sizeof(s->config))||memcmp(s->dims,dims,sizeof(dims))))return -1;
+        s->source=src;memcpy(s->config,config,sizeof(s->config));memcpy(s->dims,dims,sizeof(dims));
+    }
+    cf.fit_feature=feature;cf.fit_mask=mask;cf.export_feature_weights=feature?weights:NULL;
+    cf.export_prediction=predictions;cf.fit_session=s;
+    cf.export_activity=activity;cf.export_activity_histogram=histogram;
     return ng_encode_core(src,&cf,params,cap,n,sy,cl);
 }
 

@@ -29,7 +29,7 @@ int vc_ng_leaf_decode(const uint8_t *src,size_t size,const uint32_t expected[3],
     if(expected&&(x!=expected[2]||y!=expected[1]||z!=expected[0]))goto done;
     unsigned edge=mode>>8; mode&=255;
     if(!r.ok || !ng_geometry_valid(x,y,z) || cap!=(size_t)x*y*z || mode>1 || nm>4 || !nc || nc>60 ||
-       (edge!=2 && edge!=4 && edge!=8 && edge!=16 && edge!=32)) goto done;
+       !vc_ng_edge_valid(edge)) goto done;
     ng_current_geometry=(ng_geometry){(int)x,(int)y,(int)z};ng_choice_edge=edge;
     const uint8_t *params[4]={0};size_t lengths[4]={0};vc_ng_choice menu[60];
     for(unsigned i=0;i<nm;++i) {
@@ -40,8 +40,7 @@ int vc_ng_leaf_decode(const uint8_t *src,size_t size,const uint32_t expected[3],
         vc_ng_choice *c=&menu[i];c->predictor=vc_get(&r,1);c->model=vc_get(&r,1);c->entropy=vc_get(&r,1);
         if(vc_get(&r,1)) goto done;
         for(unsigned j=0;j<2;++j) { uint32_t w=vc_get(&r,4);memcpy(&c->weights[j],&w,4); }
-        if(c->predictor>12 || (c->model!=255 && c->model>=nm) || c->entropy>=16 ||
-           (c->predictor==12 && (c->model!=255 || c->weights[0] || c->weights[1]))) goto done;
+        if(!vc_ng_choice_valid(c->predictor,c->model,c->entropy,c->weights[0],c->weights[1],nm)) goto done;
         if(nb<=c->entropy)nb=c->entropy+1;
     }
     size_t count=(size_t)(x/edge)*(y/edge)*(z/edge),volume=(size_t)x*y*z;

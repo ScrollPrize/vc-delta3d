@@ -7,15 +7,13 @@
 extern _Thread_local unsigned ng_choice_edge;
 void* ng_fit_session_create(void);
 void ng_fit_session_destroy(void*);
-int ng_feature_prepare_cached(void*,const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
 int ng_bank_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t* const*,const uint8_t*,const uint8_t*,uint8_t* const*,uint8_t*,uint16_t*);
 int ng_bank_selected_symbols(unsigned,const uint8_t* const*,const size_t*,const uint16_t* const*,const uint8_t*,const uint8_t*,uint8_t* const*,uint8_t*,uint16_t*);
 void* ng_causal_create(const uint8_t* params,size_t n,int history);
 void ng_causal_destroy(void* state);
 /* config: r0,r1,r2,classes,tap budget,fit stride. Validated before use. */
-int ng_plain_prepare_masked(const uint8_t*,const int*,const uint8_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
-int ng_feature_prepare_masked(const uint8_t*,const int*,const uint8_t*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*);
-int ng_feature_prepare_activity(const uint8_t*,const int*,const uint8_t*,int32_t*,uint8_t*,size_t,size_t*,uint8_t*,uint16_t*,uint32_t*);
+int ng_prepare(const uint8_t*,const int*,const uint8_t*,const uint8_t*,void*,int32_t*,
+    uint8_t*,size_t,size_t*,uint8_t*,uint8_t*,uint16_t*,uint16_t*,uint32_t*);
 int ng_wave_encode(const uint8_t*,size_t,const uint8_t*,const uint8_t*,uint8_t*,size_t,size_t*);
 /* Per-call decoder state; no experimental controls or nested TLS overrides. */
 typedef struct {

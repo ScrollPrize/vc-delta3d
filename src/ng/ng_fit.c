@@ -17,7 +17,7 @@ int vc_ng_fit_input(vc_ng_fit *fit, const uint8_t *src, const int *cfg,
 {
     const size_t n = NG_N;
     uint8_t *feature = NULL, *classes = NULL;
-    int ok = 0, rc;
+    int ok = 0;
     memset(fit, 0, sizeof(*fit));
     fit->params = malloc(65536);
     fit->symbols = malloc(n);
@@ -32,23 +32,8 @@ int vc_ng_fit_input(vc_ng_fit *fit, const uint8_t *src, const int *cfg,
         uint8_t delta = (uint8_t)((fixed[i] >> 1) ^ (0u - (fixed[i] & 1u)));
         feature[i] = (uint8_t)(src[i] - delta);
     }
-    if (!fixed) {
-        if (session || activity) goto done;
-        rc = ng_plain_prepare_masked(src,cfg,mask,fit->params,65536,&fit->param_size,
-                                     fit->symbols,classes,fit->base);
-    } else if (session) {
-        if (mask || activity) goto done;
-        rc = ng_feature_prepare_cached(session, src, cfg, feature, fit->weights,
-            fit->params, 65536, &fit->param_size, fit->symbols, classes, fit->base);
-    } else if (activity) {
-        if (mask || !histogram) goto done;
-        rc = ng_feature_prepare_activity(src, cfg, feature, fit->weights,
-            fit->params, 65536, &fit->param_size, fit->symbols, activity, histogram);
-    } else {
-        rc = ng_feature_prepare_masked(src, cfg, feature, mask, fit->weights,
-            fit->params, 65536, &fit->param_size, fit->symbols, classes, fit->base);
-    }
-    if (rc) goto done;
+    if (ng_prepare(src,cfg,feature,mask,session,fit->weights,fit->params,65536,&fit->param_size,
+                   fit->symbols,classes,fit->base,activity,activity?histogram:NULL)) goto done;
     if (!activity) {
         unsigned K = fit->params[4];
         if (fit->param_size < 2 * K) goto done;

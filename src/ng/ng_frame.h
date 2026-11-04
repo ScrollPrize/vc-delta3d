@@ -9,6 +9,13 @@ int vc_ng_slow_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
 int vc_ng_preset_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
 typedef struct { const uint8_t *data; size_t size; } vc_ng_model;
 typedef struct { unsigned predictor,model,entropy; int32_t weights[2]; } vc_ng_choice;
+/* Shared wire limits, independent of the current encoder's preset menus. */
+static inline int vc_ng_edge_valid(unsigned edge) {
+    return edge==2||edge==4||edge==8||edge==16||edge==32;
+}
+static inline int vc_ng_choice_valid(unsigned p,unsigned m,unsigned b,uint32_t w0,uint32_t w1,unsigned nm) {
+    return p<=12&&(m==255||m<nm)&&b<16&&(p!=12||(m==255&&!w0&&!w1));
+}
 double vc_ng_model_cost(const vc_ng_model*,unsigned,const vc_ng_choice*,unsigned);
 int vc_ng_frame_all_zero(unsigned,uint8_t**,size_t*);
 /* Already fitted models/selected blocks: serialize native NCF1, without search.

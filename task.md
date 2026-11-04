@@ -1,5 +1,44 @@
 # C-only codec reduction
 
+## Decoder-focused follow-up (2026-11-04)
+
+Completed all four non-SIMD trials; SIMD transpose scaffolding unchanged.
+Inline publication: -21 decoder lines, rejected after repeated 0.85-0.93%
+slowdowns on medium/slow/slower. Scalar metadata helper: +4 decoder lines,
+rejected. Direct dummy initialization: +3 total lines and duplicates default
+initialization, rejected. Retained dense internal entropy-table handoff:
+7,505 -> 7,500 production lines; decoder-only remains 1,446.
+No wire change; all 576 encoded frames remain byte-identical.
+Native/portable/sanitizer CTest 7/7 each, Python 139 and C++ smoke pass.
+Retained decode timing changes range from -0.262% to +1.056% over two runs;
+no reliable small speedup claim. Encode fast +1.183%, medium +0.030%,
+slower -0.064%; slow initially -0.573%, confirmation -0.368%, pooled -0.470%.
+Two-line extra table-construction fusion rejected after decoder slowdown.
+Compiled text grows 5,240 bytes despite source reduction.
+Full report: experiments/decoder_simplification.md.
+Data: /data/hendrik/compression_experiments/villa4/encoder_speed/decoder_pass.
+No unfinished trials remain. No commit made in this follow-up.
+
+## Measured consolidation follow-up (2026-11-03)
+
+Baseline: 3b1c266, preserved native binary in builds/cleanup-3b1c266 under
+/data/hendrik/compression_experiments/villa4. Consolidate fitting preparation
+and wire validation without changing preset policy, format, arithmetic, or ISA
+kernels. No dependency added; indexed scratch allocation stays unchanged.
+Trialled shared screening ownership and discarded it: +11 production lines and
+an additional lifetime abstraction. Tiny block-map and bit-stream extractions
+are deferred because their helper plumbing does not meaningfully reduce code.
+Retained production reduction: 7,530 -> 7,505 physical lines, 81 files.
+Full 576-case corpus is byte-identical; release/portable/sanitizer CTest 7/7
+each, Python 139 and C++ adapter smoke pass. Three full paired encoder runs
+completed: pooled fast +1.154%, medium -0.268%, slow -0.231%, slower -0.433%.
+One CPU8 repeat was marginally beyond tolerance for medium/slower; separate
+full confirmation and pooled measurements are within 0.5%. All runs, including
+the outlier, are documented. Decode changes -0.034% to +0.281%. No dependency
+added, no format or compression change. No unfinished test remains.
+Report: experiments/consolidation_cleanup.md.
+Results: encoder_speed/consolidation_20261103 under the same data root.
+
 ## Contract
 
 - Branch: `refactor/c-only-presets`, based on merged main `98bb019`.

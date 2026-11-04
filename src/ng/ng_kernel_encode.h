@@ -335,7 +335,7 @@ entropy_ready:
   for (int k = 0; k < K; k++) {
     uint16_t fr[256];
     vcn_lc_norm(cnt[k], fr, tb);
-    pos+=vcn_lc_write_table(hdr+pos,fr);
+    for(unsigned s=0;s<256;s++,pos+=2)vcn_wr16(hdr+pos,fr[s]);
     uint32_t cum = 0;
     for (unsigned s = 0; s < 256; s++) {
       const uint32_t f = fr[s];

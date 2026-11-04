@@ -23,12 +23,18 @@ int main(void){
         if(entropy){
             params[6]=params[7]=0;assert(vc_buffer_append(&raw,params,pn));
             for(unsigned k=0;k<16;k++){
-                uint16_t freq[256]={0};uint8_t table[514];
+                uint16_t freq[256]={0};
                 freq[k]=1024;freq[255-k]=3072;
-                size_t n=ng_write_freq_table(table,freq);assert(vc_buffer_append(&raw,table,n));
+                for(unsigned j=0;j<256;j++)assert(vc_buffer_put(&raw,freq[j],2));
             }
         }
         uint8_t*z=NULL,*p=NULL;size_t zn=0,n=0;
+        if(entropy){
+            /* Dense internal tables still require the exact normalized sum. */
+            raw.data[raw.size-1]^=1;
+            assert(!vc_header_encode(raw.data,raw.size,&z,&zn));free(z);
+            raw.data[raw.size-1]^=1;
+        }
         assert(vc_header_encode(raw.data,raw.size,&z,&zn));
         assert(vc_header_decode(z,zn,&p,&n)&&n==raw.size&&!memcmp(p,raw.data,n));free(p);
         /* Exercise the optional transmitted-table mode even though the default
