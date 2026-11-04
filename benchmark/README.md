@@ -88,3 +88,14 @@ named `<sha256>.raw`.
 
 Frozen corpora and historical executables are not distributed with the library.
 Use the native tests and Python tests for self-contained correctness checks.
+
+For a fresh full-frame comparison, run `check_core_cleanup.py` with
+`--workers 1 --repetitions 3`, then `check_controls.py` with the same
+`--manifest` and `--raw-dir`, an explicit `--library` pointing to the
+historical native control fixture, and `--output <controls.jsonl>`.
+The latter measures legacy Delta3D, LPC, original NG, single-threaded Blosc
+(LZ4/Zstd level 5, byte shuffle) and Zstd level 3. The control fixture ABI
+is described in the script; it is not linked into the production library.
+Use `report_framed.py --presets <presets.jsonl> --controls <controls.jsonl>
+--output <report.md>` for per-channel and aggregate sizes/speeds, including
+repeat statistics. The reporting tool expects the 18-group/eight-chunk corpus.
