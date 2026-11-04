@@ -45,13 +45,10 @@ vc_delta3d::Predictor parsePredictor(const std::string& name)
 {
     if (name == "delta")
         return vc_delta3d::Predictor::Delta;
-    if (name == "lpc")
-        return vc_delta3d::Predictor::Lpc;
     if (name == "fast") return vc_delta3d::Predictor::Fast;
     if (name == "medium") return vc_delta3d::Predictor::Medium;
     if (name == "slow") return vc_delta3d::Predictor::Slow;
     if (name == "slower") return vc_delta3d::Predictor::Slower;
-    if (name == "tooslow") return vc_delta3d::Predictor::TooSlow;
     throw std::invalid_argument("unknown predictor/preset");
 }
 
@@ -139,9 +136,7 @@ NB_MODULE(_codec, m)
     m.doc() = "VC-Delta3D compression bindings";
 
     nb::enum_<vc_delta3d::LeafCodec>(m,"LeafCodec")
-        .value("Choice",vc_delta3d::LeafCodec::Choice)
-        .value("Tree",vc_delta3d::LeafCodec::Tree)
-        .value("Rectangular",vc_delta3d::LeafCodec::Rectangular);
+        .value("Choice",vc_delta3d::LeafCodec::Choice);
     nb::class_<vc_delta3d::IndexedLeaf>(m,"IndexedLeaf")
         .def_ro("channel",&vc_delta3d::IndexedLeaf::channel)
         .def_ro("origin",&vc_delta3d::IndexedLeaf::originZYX)
@@ -169,16 +164,16 @@ NB_MODULE(_codec, m)
         if(!ok)throw std::runtime_error("invalid indexed leaf");return toBytes(out);
     },"payload"_a,"leaf"_a);
     m.def("compress_indexed",[](nb::bytes raw,int z,int y,int x,int channels,bool last,const std::string&p,
-        const std::vector<std::array<std::uint32_t,3>>&plan){
+        const std::vector<std::array<std::uint32_t,2>>&plan){
         vc_delta3d::IndexedOptions options;options.preset=parsePredictor(p);
-        for(auto n:plan){if(n[0]>4||n[2]>1)throw std::invalid_argument("invalid partition node");
-            options.partition.push_back({vc_delta3d::SplitAxis(n[0]),n[1],bool(n[2])});}
+        for(auto n:plan){if(n[0]>8)throw std::invalid_argument("invalid partition node");
+            options.partition.push_back({vc_delta3d::SplitAxis(n[0]),n[1]});}
         std::vector<std::byte> out;auto src=bytesSpan(raw);
         {nb::gil_scoped_release release;out=vc_delta3d::compressIndexed(src,{z,y,x},channels,
             last?vc_delta3d::ChannelLayout::Last:vc_delta3d::ChannelLayout::First,options);}
         return toBytes(out);
     },"raw"_a,"z"_a,"y"_a,"x"_a,"channels"_a=1,"channels_last"_a=false,
-      "predictor"_a="fast","partition"_a=std::vector<std::array<std::uint32_t,3>>{});
+      "predictor"_a="fast","partition"_a=std::vector<std::array<std::uint32_t,2>>{});
 
     m.def(
         "compress",

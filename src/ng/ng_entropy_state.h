@@ -8,5 +8,4 @@ typedef struct {
   int tb;
   uint32_t S[32];
 } vcn_lc_dec;
-typedef struct {vcn_lc_dec d;uint32_t*table;unsigned K;} ng_context_rans;
 static inline uint32_t vcn_rd16(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8; }

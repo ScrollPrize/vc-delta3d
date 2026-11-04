@@ -23,6 +23,7 @@ authors = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "Programming Language :: C",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -63,7 +64,5 @@ audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
 
 [tool.cibuildwheel.linux]
-# Runs inside each manylinux container, not on the Ubuntu host.
-before-all = "dnf install -y libzstd-devel"
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"

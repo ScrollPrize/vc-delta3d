@@ -3,22 +3,21 @@
 #include <cstdint>
 
 namespace vc_delta3d {
-// Preorder binary partition. A split's first subtree immediately follows it,
+// Preorder partition. A split's first subtree immediately follows it,
 // then its second subtree. Spatial cuts are relative voxel extents (32-grid);
 // channel cuts are relative channel counts. No padding or overlapping leaves.
-enum class SplitAxis : unsigned char { Z=0, Y=1, X=2, Channel=3, Leaf=4 };
+// Repeats have one child template and cut stores the repetition count.
+enum class SplitAxis : unsigned char { Z=0, Y=1, X=2, Channel=3, Leaf=4,
+    RepeatZ=5, RepeatY=6, RepeatX=7, RepeatChannel=8 };
 struct PartitionNode {
     SplitAxis axis=SplitAxis::Leaf;
     std::uint32_t cut=0;
-    // Explicit opt-in to the documented rectangular mode504 baseline; this
-    // is NOT a silent substitution for one of the five cubic presets.
-    bool rectangularBaseline=false;
 };
 struct IndexedOptions {
     Predictor preset=Predictor::Fast;
-    std::vector<PartitionNode> partition; // empty: channel splits + cubic leaves
+    std::vector<PartitionNode> partition; // empty: channel repeat + cubic leaves
 };
-enum class LeafCodec : unsigned char { Choice=16, Tree=17, Rectangular=18 };
+enum class LeafCodec : unsigned char { Choice=16 };
 struct IndexedLeaf {
     std::uint32_t channel=0;
     std::array<std::uint32_t,3> originZYX{},shapeZYX{};
@@ -33,13 +32,14 @@ struct ChunkIndex {
     std::vector<IndexedLeaf> leaves;
 };
 
-// NGC1 only. Read >=8 bytes first; nullopt means incomplete/invalid prefix.
+// NGC2 compact / NGX2 extended. Read >=8 bytes; nullopt means invalid/incomplete.
 // Read the rest of this many header bytes, then inspect without any payload.
 std::optional<std::uint32_t> indexedHeaderSize(std::span<const std::byte> prefix);
 // Validates tree coverage, geometry, codecs, offsets and exact object length.
 // Throws invalid_argument on malformed input. Does NOT fetch/decode payloads.
 ChunkIndex readIndex(std::span<const std::byte> header,std::uint64_t objectBytes);
-// Input is uint8 only. All spatial extents/cuts must be positive multiples32.
+// Input is uint8 only. Spatial extents/cuts are positive multiples of32.
+// Encoder leaves are cubic and use the selected preset; decoding also accepts rectangles.
 std::vector<std::byte> compressIndexed(std::span<const std::byte> input,
     std::array<int,3> shapeZYX,int channels,ChannelLayout layout,
     const IndexedOptions& options={});
@@ -49,3 +49,6 @@ bool decodeIndexedLeaf(std::span<const std::byte> payload,const IndexedLeaf& lea
     std::span<std::byte> output);
 bool decompressIndexedInto(std::span<const std::byte> input,std::span<std::byte> output);
 } // namespace vc_delta3d
+
+// Header-only ownership adapter; codec implementation and library are pure C.
+#include <vc_delta3d/detail/indexed_adapter.hpp>

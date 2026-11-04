@@ -38,55 +38,26 @@ namespace vc_delta3d {
 // recompression can tell what an existing payload already carries;
 // quantization is idempotent, so re-encoding at the same width is lossless.
 //
-// Instead of the delta filter, uint8 chunks can use a per-chunk linear
-// predictor (LPC, Predictor::Lpc): the encoder picks 40 of the 62 causal
-// voxels in the 5x5x5 box around a voxel (greedy, per chunk), least-squares
-// fits their weights and an intercept, and codes the prediction residuals
-// with the same rANS frame. On scroll CT it is ~18-25% smaller than the delta
-// filter at full resolution, but encodes and decodes several times slower.
-// The encoder also builds the delta frame and keeps whichever payload is
-// smaller, so Lpc is never worse than Delta.
-//
 // D3D1 layout (all integers little-endian):
 //   0..3   magic 'D' '3' 'D' '1'
 //   4      format version (1)
 //   5      element size in bytes (1 or 2)
 //   6      quantization bin width (0 and 1 both mean lossless)
-//   7      bits 0-3: predictor marker, 1 = delta filter, 2 = LPC.
+//   7      bits 0-3: predictor marker, 1 = delta filter; retired marker 2 is rejected.
 //          Delta: bit 7 set means bits 4-6 record the delta-axis mask (bit 4
 //          x, bit 5 y, bit 6 z). When bit 7 is clear, the filter is full zyx.
-//          LPC: bits 4-7 are zero.
 //   8..19  chunk dims as three uint32: z, y, x (element counts)
-//   20..   LPC only: the parameter block below (11 + 2 * taps bytes)
-//   then   256 uint16 symbol frequencies summing to 4096, then eight uint64
+//   20..   256 uint16 symbol frequencies summing to 4096, then eight uint64
 //          initial rANS states, then the rANS byte stream (decoded back to
 //          front by construction)
 //
-// LPC parameter block (element size must be 1):
-//   0      stencil id (2: causal box of radius 2, weights in 1/256 units)
-//   1..8   uint64 tap mask: bit i set means tap i is used (bits 62-63 zero).
-//          Taps are numbered in the order dz = -2..0, then dy = -2..2, then
-//          dx = -2..2, keeping the causal offsets (dz < 0, or dz = 0 and
-//          dy < 0, or dz = 0, dy = 0 and dx < 0): 62 taps, the last two being
-//          (0, 0, -2) and (0, 0, -1)
-//   9..    one int16 weight per used tap, in tap order
-//   then   uint16 bias
-//
-// LPC residuals are r = (v - p) mod 256 in raster order (x fastest). Voxels
-// with z >= 2, 2 <= y < Y-2 and 2 <= x < X-2 are predicted as
-//   p = ((bias + sum over used taps i of w_i * v[z+dz_i][y+dy_i][x+dx_i])
-//        mod 2^16) >> 8
-// so any weights and bias are valid. All other voxels use the clamped Lorenzo
-// prediction p = clamp(W + N + U - NW - WU - NU + NWU, 0, 255), reading
-// neighbors outside the chunk as 0.
-
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
-// Delta/Lpc explicitly retain the legacy algorithm and version-1 frame.
-// Presets emit NCF1/HGT3 for scalar cubes and NGC1 for indexed spatial/channel
+// Delta explicitly retains the legacy algorithm and version-1 frame.
+// Presets emit NCF1 for scalar cubes and NGC2 for indexed spatial/channel
 // partitions. Regular APIs fall back to legacy Delta/D3D1 for 16-bit data,
 // quantization, or dimensions not divisible by32; invalid inputs still fail.
-enum class Predictor { Delta = 1, Lpc = 2, Fast = 3, Medium = 4,
-                       Slow = 5, Slower = 6, TooSlow = 7 };
+enum class Predictor { Delta = 1, Fast = 3, Medium = 4,
+                       Slow = 5, Slower = 6 };
 
 // Multi-channel chunks (format version 2) are a container of independent
 // version-1 payloads, one per channel, each coding that channel's z, y, x
@@ -128,14 +99,11 @@ inline constexpr int kQuantizationLossless = 1;
 inline constexpr int kQuantizationMaxError1 = 3;
 inline constexpr int kQuantizationMaxError2 = 5;
 
-// Smallest chunk edge for which Predictor::Lpc tries the linear predictor;
-// smaller chunks, and uint16 chunks, always use the delta filter.
-inline constexpr int kLpcMinDim = 16;
 
 // Compresses one decoded chunk of shapeZYX elements of elemSize bytes.
 // quantBinWidth 1 is lossless; larger widths quantize first (see above).
-// Modern presets require elemSize=1, quant=1 and32-aligned dimensions;
-// non-cubic/large shapes use the NGC1 indexed spatial container.
+// Presets require elemSize=1, quant=1 and32-aligned dimensions;
+// non-cubic/large shapes use the NGC2 indexed spatial container.
 // Throws std::invalid_argument unless input.size() equals z*y*x*elemSize
 // with elemSize 1 or 2, and quantBinWidth is in [1, 255].
 std::vector<std::byte> compress(std::span<const std::byte> input,
@@ -149,8 +117,8 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
 std::optional<Predictor> predictor(std::span<const std::byte> input);
 
 // Compresses one chunk of `channels` fields of shapeZYX elements, laid out as
-// `layout` says, into NGC1 for modern presets or the legacy version-2 D3D1
-// container for explicit Delta/Lpc. The two paths do not mix. quantBinWidth and
+// `layout` says, into NGC2 for presets or the legacy version-2 D3D1
+// container for explicit Delta. The two paths do not mix. quantBinWidth and
 // predictor apply to every channel. Throws std::invalid_argument unless
 // input.size() equals channels*z*y*x*elemSize with channels >= 1 and elemSize
 // 1 or 2.
@@ -162,12 +130,12 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
                                         int quantBinWidth = kQuantizationLossless,
                                         Predictor predictor = Predictor::Fast);
 
-// Channel count:1 for scalar D3D1/NCF1/HGT3; C for D3D1-v2 or NGC1;
+// Channel count:1 for scalar D3D1/NCF1; C for D3D1-v2 or NGC2;
 // std::nullopt for unsupported/malformed headers. The decoded size of a payload
 // is channels * z * y * x * elementSize.
 std::optional<int> channelCount(std::span<const std::byte> input);
 
-// Reads decoded byte count from either legacy or modern frame metadata.
+// Reads decoded byte count from either legacy or preset frame metadata.
 // No predictor preset is needed. Invalid/unsupported headers return nullopt.
 std::optional<std::size_t> decodedSize(std::span<const std::byte> input);
 
@@ -191,7 +159,7 @@ std::optional<int> quantization(std::span<const std::byte> input);
 // tell whether re-encoding a payload could still shrink it.
 std::optional<int> deltaMask(std::span<const std::byte> input);
 
-// Decompresses D3D1(version1/2), NCF1/HGT3, or NGC1 whose
+// Decompresses D3D1(version1/2), NCF1, or NGC2 whose
 // decoded size must equal expectedSize.
 // Returns std::nullopt on any error or size mismatch.
 std::optional<std::vector<std::byte>> decompress(
@@ -215,3 +183,6 @@ bool decompressIntoWithMagic(std::span<const std::byte> input,
                              const WireMagic& expectedMagic);
 
 } // namespace vc_delta3d
+
+// Header-only ownership adapter; codec implementation and library are pure C.
+#include <vc_delta3d/detail/codec_adapter.hpp>

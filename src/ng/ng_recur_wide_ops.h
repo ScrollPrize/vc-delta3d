@@ -15,15 +15,9 @@
 #define NG_RSLL _mm512_slli_epi16
 #define NG_RSUB _mm512_sub_epi16
 #define NG_RXOR _mm512_xor_si512
-#ifdef NG_NATIVE_MASK
 #define NG_RMT __mmask32
 #define NG_RMASKVAL(M,V) _mm512_maskz_mov_epi16(M,V)
 #define NG_REQ _mm512_cmpeq_epi16_mask
 #define NG_RBLEND(A,B,M) _mm512_mask_blend_epi16(M,A,B)
 #define NG_RMASK(A) ((int32_t)(A))
-#else
-#define NG_REQ(A,B) _mm512_maskz_set1_epi16(_mm512_cmpeq_epi16_mask(A,B),-1)
-#define NG_RBLEND(A,B,M) _mm512_mask_blend_epi8(_mm512_movepi8_mask(M),A,B)
-#define NG_RMASK(A) ((int64_t)_mm512_movepi8_mask(A))
-#endif
 #define NG_ROUT(P,V) _mm256_storeu_si256((__m256i*)(P),_mm512_cvtepi16_epi8(V))

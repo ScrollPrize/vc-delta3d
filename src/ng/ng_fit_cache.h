@@ -15,17 +15,13 @@ typedef struct {
 typedef struct {
     ng_fit_bank_cache banks[2];
     uint8_t* padded;
-    int padded_ready,simd,uniform_sparse;
+    int padded_ready;
     const uint8_t* source;
     int config[6],dims[3];
 } ng_fit_session;
-/* The legacy linear row phase is suitable for its normal stride128, but a
- * much larger stride would sample only a corner. Deterministic row hashing
- * distributes sparse samples across the whole volume. */
-static inline unsigned ng_fit_sample_phase(unsigned y,unsigned z,unsigned stride,int uniform){
-    if(!uniform||stride<=128)return (y*7+z*3)%stride;
-    uint32_t h=(y+1)*0x9e3779b9u^(z+1)*0x85ebca6bu;
-    h^=h>>16;h*=0x7feb352du;h^=h>>15;return h%stride;
+/* Original deterministic phase; unchanged sampling positions. */
+static inline unsigned ng_fit_sample_phase(unsigned y,unsigned z,unsigned stride){
+    return (y*7+z*3)%stride;
 }
 /* Preserve the unmasked sparse sample budget, redistributed deterministically
  * over eligible mask entries. Stratify by rank, without replacement. An empty
@@ -33,11 +29,11 @@ static inline unsigned ng_fit_sample_phase(unsigned y,unsigned z,unsigned stride
  * NULL means retain the original traversal (dense or no excluded targets).
  * This selects targets only: source/predictor-neighbor values never change. */
 static inline uint8_t* ng_fit_nonzero_sample_mask(const uint8_t*mask,int X,int Y,int Z,
- int xlo,int zlo,int zhi,int stride,int uniform,uint64_t stats[3]){
+ int xlo,int zlo,int zhi,int stride,uint64_t stats[3]){
     stats[0]=stats[1]=stats[2]=0;
     if(!mask||stride<=1)return NULL;
     for(int z=zlo;z<zhi;z++)for(int y=0;y<Y;y++){
-        int start=xlo+(int)ng_fit_sample_phase(y,z,stride,uniform);
+        int start=xlo+(int)ng_fit_sample_phase(y,z,stride);
         if(start<X)stats[0]+=(X-1-start)/stride+1;
         for(int x=xlo;x<X;x++)stats[1]+=mask[((size_t)z*Y+y)*X+x]!=0;
     }

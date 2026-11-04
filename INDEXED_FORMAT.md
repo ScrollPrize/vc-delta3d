@@ -1,117 +1,143 @@
-# NGC1 indexed channel/spatial container
+# Compact / extended indexed channel and spatial container
 
-NGC1 implements the agreed NG/Delta tree container. It is **not** a D3D1
-extension, and contains no D3D1 children. Modern and legacy encoding paths
-are separate. All integers are fixed-width little-endian, with no alignment
-padding. The complete index is uncompressed and precedes all payloads.
+One tree grammar, with two fixed-width representations. No varints, explicit
+payload offsets, alignment padding, historical container readers, or D3D1
+children. Only original Delta3D retains compatibility. The magic selects every
+field width in the container; it does not select a different codec or preset.
 
-## Prefix — 24 bytes
+## Prefix
 
-|Offset|Bytes|Meaning|
-|---|---:|---|
-|0|4|`NGC1` (magic and version)|
-|4|4|Total header length, including prefix|
-|8|12|Logical Z, Y, X dimensions (three uint32)|
-|20|4|Channel count in low31 bits; high bit means channels-last|
+| Field | Compact NGC2 | Extended NGX2 |
+|---|---:|---:|
+| Magic/version |4|4|
+| Total header length including prefix |2|4|
+| Flags: bit0 channels-last, others zero |1|1|
+| Root Z, Y, X: each dimension/32 minus one |3 ×1|3 ×4|
+| Channel count minus one |1|4|
+| **Total prefix** |**11 B**|**25 B**|
 
-Total object length is implied by the last leaf's end and checked against
-the storage object's length; it is not stored a second time in the prefix.
+All integers are unsigned little-endian. Spatial dimensions must be multiples
+of32. Compact root dimensions cover32..8192 and channels1..256. Extended dimensions
+are also in units32, but reconstructed dimensions must fit uint32. Current APIs
+limit channels to INT32_MAX and decoded size to SIZE_MAX.
 
-Channels-first memory order is C/Z/Y/X, channels-last is Z/Y/X/C. The data
-type is uint8, lossless, by definition. Spatial extents are positive multiples
-of32; no padding, clipping, or partial boundary leaves.
+The encoder selects extended if any root dimension, channel count, tree operand,
+leaf length, or the total compact header length exceeds the compact field.
+Compact header length is at most65535. Extended header length is at mostUINT32_MAX.
+Reading8bytes suffices to discover either header length (compact needs only6).
+No fixed-size reserved header slab.
 
-## Preorder binary partition tree
+## Tree template
 
-The root covers the full channel/spatial domain. Every internal node has
-exactly two children, serialized first-child subtree then second-child subtree.
-No child pointers, node counts, parent IDs, or repeated leaf coordinates.
+The prefix is followed by one preorder tree template:
 
-* Split record: **5 bytes** — axis tag(uint8), cut(uint32).
-  Tags0/1/2 mean Z/Y/X; tag3 means channels. The cut is the first child's
-  extent relative to the parent, in voxels or channel count. Spatial cuts
-  must be multiples of32, and every cut must be strictly inside its parent.
-* Leaf record: **17 bytes** — codec/version tag(uint8), absolute object
-  payload offset(uint64), payload length(uint64).
-  Tag16 is NCF1; tag17 is HGT3; tag18 is the documented rectangular NDB2
-  mode504 grammar. Each leaf covers exactly one channel. Shape, location and
-  channel identity are derived from the tree.
+| Wire tag | Meaning | Following operand |
+|---|---|---|
+|0/1/2|Binary split Z/Y/X|First-child extent/32 minus one|
+|3|Binary split channels|First-child channel count minus one|
+|4/5/6|Repeat Z/Y/X|Repetition count minus one|
+|7|Repeat channels|Repetition count minus one|
+|8|Leaf|None|
 
-Payloads immediately follow the header, in leaf traversal order, without
-gaps or alignment padding. Offsets and lengths are validated against the full
-object length. The last payload must end exactly at the object end.
-Each leaf owns its complete prediction and entropy state; no sibling references.
-NCF1/HGT3 are unchanged native frames. Rectangular NDB2 stores its dimensions
-only in the index, not an additional NDL1 wrapper.
+Operands occupy1byte compact or4bytes extended. Spatial split values thus
+cover32..8192 in compact mode, including byte255 representing8192.
+Repeat counts cover2..256 in compact mode; stored zero (count1) is rejected.
+Other tags are invalid. A binary split has two child templates. A repeat has
+exactly one child template, instantiated into equal disjoint regions along its
+axis. The parent extent must divide exactly; spatial children remain32-aligned.
+Every leaf has exactly one channel. All other extents are inherited.
 
-Overhead for L leaves is **24 + 17L + 5(L−1) = 22L + 19 bytes**:
-41 for1 leaf,63 for2,107 for4,195 for8,371 for16. For8 channels of128³ this
-is0.001162% of raw size. There is no reserved4KiB header slab. These are
-container/index bytes; the leaf's own model/entropy metadata remains necessary.
-Ordinary scalar cubic encoding emits NCF1/HGT3 directly, with **zero**
-additional container overhead; `compressIndexed` explicitly requests an index.
+The template ends after its complete root subtree. No explicit template length
+or node count is necessary. It is followed by one length per **expanded leaf**,
+4bytes compact or8bytes extended. Payloads follow immediately in the same order.
+Offsets are the cumulative sum of lengths starting at the header end, always
+using64-bit arithmetic. The final leaf must end exactly at the object end.
 
-## Shapes, encoding policy and validation
+Traversal order: first child before second for splits; repetition0,1,... for
+repeats, each visiting the full child template. Each occurrence has its own
+length, payload, fitted models and entropy state. Repetition shares geometry
+only; it never shares compressed data or causal prediction state.
 
-Logical dimensions can exceed a single leaf's limits. Rectangular leaves
-require32<=X<=1024, Y/Z>=32, all dimensions32-aligned, and Y*Z<=65536.
-The default encoder separates channels and partitions spatially into cubes
-that fit the existing five preset kernels. No adaptive partition optimization
-is implied. Caller-provided preorder partitions allow different spatial trees
-per channel. Rectangular mode504 leaves are an **explicit** per-leaf option,
-not a silent replacement for fast/medium/slow/slower/tooslow.
+Default multi-channel encoding uses a channel-repeat node around one canonical
+spatial partition. Explicit plans can use arbitrary binary splits and repeats,
+including different spatial trees for different channels. Existing explicit
+binary plans are not automatically deduplicated; callers can express repetition
+directly. There is no automatic compression-driven partition search.
 
-The decoder validates header lengths, integer products, geometry, split
-alignment, exact tree coverage, leaf codec IDs and payload ranges before
-decoding. The traversal uses a heap stack, not recursive calls on untrusted
-tree depth. Invalid partitions are rejected before encoder model fitting.
-The regular `compress`/`compressChannels` APIs automatically choose the complete
-legacy Delta3D path for 16-bit data, quantized data, or positive dimensions not
-divisible by 32. This produces D3D1, never an NGC1 container with legacy leaves.
-Invalid types, shapes, sizes and quantization settings still raise errors.
-The explicit `compressIndexed` API does not fall back: incompatible geometry
-or partition requests are errors. Explicit `delta`/`lpc` behavior is unchanged.
-D3D1 version2 accepts only legacy D3D1 scalar children; mixed old/new containers
-and the discarded D3D1 version3 envelope are rejected.
+## Leaf representation and overhead
 
-## APIs and byte-range access
+All leaves use the NCF1 codec. Their redundant four-byte magic is omitted inside
+the container. They retain their four-byte compressed-header length, followed by
+the same compact header, selector payload and residual payload as a standalone
+NCF1 frame. Decode uses the shared native implementation with an expected ZYX
+shape; no payload copy or reconstructed magic is needed. Embedded leaves must
+be passed to decodeIndexedLeaf, not the standalone-frame decoder.
 
-Existing `compressChannels` / Python `Delta3D(channel_axis=...)` select NGC1
-for modern presets and the unchanged D3D1 container for Delta/LPC. Existing
-`decompress`, `decompressInto`, `decodedSize`, and `channelCount` recognize NGC1.
-All format/shape/channel/partition information needed to decode is in the
-object; no per-chunk index information is added to Zarr metadata.
+For a tree with B binary nodes, R repeat nodes, T template leaf nodes and L
+expanded payload leaves:
 
-Additional C++ APIs in `include/vc_delta3d/indexed.hpp`:
+- Compact index:11 +2B +2R +T +4L bytes.
+- Extended index:25 +5B +5R +T +8L bytes.
+- Embedded leaf prefixes:another4L bytes.
+- Model/entropy headers and selector/residual data are additional.
 
-* `compressIndexed(input, shapeZYX, channels, layout, options)`.
-* `indexedHeaderSize(prefix)` needs only8 bytes.
-* `readIndex(header, objectBytes)` needs the header only, not any payload.
-* `decodeIndexedLeaf(payload, leafDescriptor, output)` needs only that leaf's
-  byte range. Calls on independent leaves can run concurrently.
+Eight full-volume channels: one repeat, one template leaf, eight lengths:
+**46-byte index +32-byte leaf prefixes =78 bytes total framing**.
+The corresponding extended framing is127bytes.
+Previous framing used259bytes; original Delta3D uses216bytes for the same
+channel count (excluding its probability tables and states).
 
-Python equivalents are native bindings, not Python codec implementations:
+Standalone scalar NCF1 retains its8-byte magic/length prefix, with no container.
+Data is uint8/lossless. Rectangular leaf limits remain X<=1024 and Y*Z<=65536,
+all extents32-aligned. Logical chunks may exceed leaf limits by subdivision.
+Encoding uses only fast/medium/slow/slower presets on cubic leaves. Rectangular
+input volumes use the canonical cubic partition. Explicit plans must also
+specify cubic leaves. The reader still accepts rectangular leaves; no wire
+format capability has been removed.
 
-```python
-from vc_delta3d import indexed_header_size, read_index, decode_indexed_leaf
+## APIs and random range access
 
-# fetch is the application's byte-range reader; object_size comes from storage.
-prefix = fetch(0, min(4096, object_size))
-header_size = indexed_header_size(prefix)
-header = prefix[:header_size]
-if len(header) < header_size:
-    header += fetch(len(header), header_size - len(header))
-index = read_index(header, object_size)
-leaf = index.leaves[0]
-pixels = decode_indexed_leaf(fetch(leaf.offset, leaf.length), leaf)
+C vc_partition_node and Python tuples use API axes:
+0/1/2 split Z/Y/X,3 split channels,4 leaf,
+5/6/7 repeat Z/Y/X,8 repeat channels.
+For repeats, cut is the repetition count. Nodes are `(axis, cut)` pairs;
+the former rectangular-baseline policy flag has been removed. These API axis
+values are deliberately distinct from wire tags.
+
+Example: three channels each with two Z regions and two X regions:
+`[(8,3),(5,2),(7,2),(4,0)]`.
+This has four template nodes but twelve independently encoded leaves.
+
+The existing C/C++/Python index APIs recognize both magics:
+indexed_header_size, read_index, decode_indexed_leaf.
+Fetch an initial range (at least8bytes), extend it if necessary to header length,
+then fetch only the selected leaf. All dimensions, layout, lengths and
+partitions are stored in the object; Zarr metadata needs no extra information.
+Independent leaf decoding can run concurrently.
+
+Parsing is iterative. Expansion is bounded by the number of physical length
+entries, so a tiny malicious repeat template cannot force unbounded expansion.
+Cuts, repeats, overflow, geometry, total coverage and exact object length are
+checked before payload decoding. No checksum is implied.
+
+Regular compression falls back to complete original Delta3D for uint16,
+quantization or non32-aligned positive dimensions. Explicit indexed compression
+rejects these inputs instead. Old experimental containers are not supported.
+
+## Build and validation
+
+From the repository root, after configuring a Release build with native tests
+and `VC_DELTA3D_MODERN_SMOKE=ON`:
+
+```sh
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/vc_delta3d_modern_smoke
 ```
 
-This is two reads when the first range contains the whole header; otherwise
-one header-extension read is needed. Cached headers remove repeat index reads.
-The codec does not itself implement S3/Zarr range requests; the APIs make them
-possible without fetching/decompressing siblings.
-
-Python `compress_indexed` also accepts `partition=[(axis,cut,rectangular),...]`.
-Axis4 denotes a leaf, with cut0; rectangular1 explicitly selects mode504.
-Example: channel0 one64³ preset leaf; channel1 two32×64×64 rectangular leaves:
-`[(3,1,0),(4,0,0),(0,32,0),(4,0,1),(4,0,1)]`.
+Python regression coverage is in tests/test_indexed.py, alongside the existing
+test_python.py, test_modern.py and test_fallback.py suites. With the built native
+module loaded, all 139 tests pass. Native CTest 7/7 passes; the sanitizer build
+exercises truncated/mutated indexes, repeat expansion and64-bit ranges.
+Framing-byte counts above are exact structural sizes, not throughput claims.
+No macOS/ARM hardware test was performed in this session.

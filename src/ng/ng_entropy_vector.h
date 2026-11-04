@@ -1,8 +1,4 @@
-#ifdef __cplusplus
-#define NG_ERESTRICT __restrict
-#else
 #define NG_ERESTRICT restrict
-#endif
 NG_EATTR static inline void NG_ENAME(int n, const uint8_t *NG_ERESTRICT cl, vcn_lc_dec *D,
                                                                     uint8_t *NG_ERESTRICT sym, int hardware_gather
 #ifdef NG_EEXTRA

@@ -3,10 +3,7 @@
 #define NG_RMT NG_RV
 #define NG_RMASKVAL NG_RAND
 #endif
-NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols,const uint16_t w[3][32],const uint16_t*feature,uint16_t prev[3][32],uint8_t*result,int blockwise,unsigned trial
-#ifdef NG_RSYMBOLS
-,const uint8_t*symbols,uint8_t*errors
-#endif
+NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols,const uint16_t w[3][32],const uint16_t*feature,uint16_t prev[3][32],uint8_t*result,int homogeneous
 #ifdef NG_RPACKED
 ,const uint8_t (*block_flags)[32],const uint8_t (*raw_bytes)[32]
 #endif
@@ -15,9 +12,11 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
 #endif
 ){
     const unsigned selector_edge=ng_choice_edge;
+#ifdef NG_RPACKED
     const unsigned selector_shift=selector_edge==2?1:selector_edge==4?2:selector_edge==8?3:selector_edge==16?4:5;
+#endif
     const NG_RV one=NG_RSET(1),two=NG_RSET(2),four=NG_RSET(4),bytes=NG_RSET(255);
-    const int span=(trial&2048)?width:(trial&128)?8:width;
+    const int span=8;
     for(int start=0;start<width;start+=span)for(int h=0;h<NG_RHALVES;h++){
         NG_RV p0=NG_RLOAD((const NG_RV*)(prev[0]+NG_RSTEP*h));
         NG_RV p1=NG_RLOAD((const NG_RV*)(prev[1]+NG_RSTEP*h));
@@ -50,21 +49,22 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
 #else
             flags=NG_COMPACT_LOAD(flags);
 #endif
-            if(trial&2)flags=NG_RAND(flags,bytes);
+            flags=NG_RAND(flags,bytes);
             NG_RMT ng=NG_REQ(NG_RAND(flags,one),one);
             NG_RMT left=NG_REQ(NG_RAND(flags,two),two);
             NG_RMT clamp=NG_REQ(NG_RAND(flags,four),four);
             NG_RV factor=NG_RBLEND(NG_RSET(256),f,ng);
-            int simple=(trial&512)||(blockwise>=2&&NG_RMASK(NG_REQ(flags,NG_RSET(11)))==-1);
-            int xyz=(trial&1)&&NG_RMASK(NG_REQ(flags,NG_RSET(7)))==-1;
-            int pair=(trial&4096)&&NG_RMASK(NG_REQ(NG_RAND(flags,NG_RSET(3)),NG_RSET(3)))==-1;
+            int simple=homogeneous||NG_RMASK(NG_REQ(flags,NG_RSET(11)))==-1;
+            int xyz=NG_RMASK(NG_REQ(flags,NG_RSET(7)))==-1;
+#ifdef NG_RFUSED
+            int pair=NG_RMASK(NG_REQ(NG_RAND(flags,NG_RSET(3)),NG_RSET(3)))==-1;
+#else
+            const int pair=0;
+#endif
             NG_RV wx=NG_RADD(w0,f);
             /* Four adjacent positions share the block selector, except x=0
              * where the causal left neighbor is absent. Bounds remain per pixel. */
-            int end=blockwise&&x?((x|(selector_edge-1))+1):x+1;
-#ifdef NG_RPACKED
-            if((trial&2048)&&x)while(end<width&&_mm256_movemask_epi8(_mm256_cmpeq_epi8(_mm256_loadu_si256((const __m256i*)block_flags[x>>selector_shift]),_mm256_loadu_si256((const __m256i*)block_flags[end>>selector_shift])))==-1)end+=selector_edge;
-#endif
+            int end=x?((x|(selector_edge-1))+1):x+1;
             if(end>width)end=width;
             if(end>start+span)end=start+span;
             for(;x<end;x++){

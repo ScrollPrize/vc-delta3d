@@ -7,8 +7,8 @@ int main() {
     using namespace vc_delta3d;
     std::vector<std::byte> a(32*32*32);
     for(size_t i=0;i<a.size();++i)a[i]=std::byte((i*17+i/32)%256);
-    for(auto p:{Predictor::Delta,Predictor::Lpc,Predictor::Fast,Predictor::Medium,
-                Predictor::Slow,Predictor::Slower,Predictor::TooSlow}){
+    for(auto p:{Predictor::Delta,Predictor::Fast,Predictor::Medium,
+                Predictor::Slow,Predictor::Slower}){
         auto f=compress(a,{32,32,32},1,1,p);
         auto d=decompress(f,a.size());assert(d&&*d==a);
         ng_set_isa_limit(256);d=decompress(f,a.size());assert(d&&*d==a);ng_set_isa_limit(0);
@@ -23,7 +23,7 @@ int main() {
     for(auto layout:{ChannelLayout::First,ChannelLayout::Last}){
         auto f=compressChannels(both,{32,32,32},2,layout,1);
         auto d=decompress(f,both.size());assert(d&&*d==both&&channelCount(f)==2);
-        auto hn=indexedHeaderSize(f);assert(hn&&*hn==63);
+        auto hn=indexedHeaderSize(f);assert(hn&&*hn==22);
         auto index=readIndex(std::span(f).first(*hn),f.size());assert(index.leaves.size()==2);
         for(const auto&leaf:index.leaves){
             std::vector<std::byte> out(a.size());
