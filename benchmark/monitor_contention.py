@@ -1,6 +1,6 @@
 """Run a benchmark while logging Linux CPU/SMT and pressure counters.
 
-Example: python benchmark/monitor_contention.py --output /data/run.jsonl \
+Example: python benchmark/monitor_contention.py --output run.jsonl \
     --cpu 64 -- python benchmark/check_decode_cleanup.py ...
 This is measurement orchestration, not codec implementation.
 """
@@ -13,7 +13,7 @@ import time
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
-p.add_argument('--cpu', type=int, default=64)
+p.add_argument('--cpu', type=int, required=True, help='Linux logical CPU used by the measured benchmark')
 p.add_argument('command', nargs=argparse.REMAINDER)
 a = p.parse_args()
 command = a.command[1:] if a.command[:1] == ['--'] else a.command

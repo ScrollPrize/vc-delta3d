@@ -42,12 +42,9 @@ arithmetic mean of channel speeds. Min/median/max are reported below.
 Per-group differences of a few percent can include clock/load noise; the
 table does not assert every individual decode became faster.
 
-Input manifest:
-`/data/hendrik/compression_experiments/villa4/encoder_speed/release_fixed_presets_20261101/results.json`
-
-Timing data and generated report:
-`/data/hendrik/compression_experiments/villa4/encoder_speed/c_only_port_20261102/`
-(`original.json`, `c_port.json`, `report.md`).
+The frozen input corpus and timing artifacts are external benchmark data,
+not bundled with this repository. Reproduction requires a compatible input
+manifest and saved baseline build; the commands below take these explicitly.
 
 ## Legacy performance regression caught and fixed
 
@@ -74,24 +71,19 @@ rANS implementation.
 
 ## Reproduction
 
-From this checkout (no dependency installation required):
+From the repository root, with the documented build dependencies installed.
+Replace the angle-bracket placeholders with your own benchmark paths:
 
 ```sh
-cmake -S . -B /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only \
+cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release -DVC_DELTA3D_BUILD_TESTS=OFF \
-  -DVC_DELTA3D_MODERN_SMOKE=ON -DVC_DELTA3D_BUILD_PYTHON=ON \
-  -DPython_EXECUTABLE=/home/hendrik/.venv_las/bin/python
-cmake --build /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only -j 12
-ctest --test-dir /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only --output-on-failure
-/home/hendrik/.venv_las/bin/python benchmark/verify_port.py \
-  --build /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only \
-  --frames /data/hendrik/compression_experiments/villa4/encoder_speed/release_fixed_presets_20261101/results.json
-/home/hendrik/.venv_las/bin/python benchmark/compare_port.py \
-  --baseline /data/hendrik/compression_experiments/villa4/builds/delta3d-modern \
-  --build /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only \
-  --frames /data/hendrik/compression_experiments/villa4/encoder_speed/release_fixed_presets_20261101/results.json \
-  --output /data/hendrik/compression_experiments/villa4/encoder_speed/c_only_port_20261102 \
-  --cpu 97 --repetitions 3
+  -DVC_DELTA3D_MODERN_SMOKE=ON -DVC_DELTA3D_BUILD_PYTHON=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+python3 benchmark/verify_port.py --build build --frames <frozen-results.json>
+python3 benchmark/compare_port.py \
+  --baseline <baseline-build> --build build \
+  --frames <frozen-results.json> --output <results-directory> --repetitions 3
 ```
 
 Add `--isa-limit 256` to verify_port for AVX2 validation. Historical sizes use

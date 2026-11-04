@@ -30,9 +30,8 @@ versions. Only old Delta3D compatibility/fallback is retained. See
 There is no streaming state, adaptive partition search, tree entropy coder,
 LPC, tooslow, alternative fitting/refinement or user-selectable decoder trial.
 Fixed-geometry instantiations share the SAME C kernels rather than copies.
-The completed cleanup and validation are recorded in
-[`experiments/preset_only_cleanup.md`](../../experiments/preset_only_cleanup.md),
-following [`experiments/final_cleanup.md`](../../experiments/final_cleanup.md).
+See the repository's [benchmark documentation](../../benchmark/README.md)
+for validation tools.
 
 ## Source map
 
@@ -73,4 +72,5 @@ The public C++ headers adapt ownership and errors; they contain no codec kernels
 - Runtime ISA dispatch retains portable/NEON fallbacks and AVX2 without AVX-512.
 - Format changes are allowed; exact decoded voxels, not old new-format bytes,
   are the invariant. Frozen old frames are imported only by the external test
-  harness, never by the codec. See `task.md` for validation commands.
+  harness, never by the codec. See `benchmark/README.md` at the repository root
+  for validation commands.

@@ -11,9 +11,6 @@ including the MIT relicensing commit
 `103b502ad784df14c876100d87f601c0b6c46888` used as this integration's base.
 The project license remains in `LICENSE`.
 
-The hybrid predictor selection, frame formats, presets, and subsequent
-optimization experiments were developed in the Villa checkout, branch
-`compression/geometry-prediction-trials`. This integration relocates that
-implementation into `src/ng`; Villa's former library path is a compatibility
-symlink, not a second source copy. Experimental entrypoints remain present
-for reproducibility but are not additional public presets.
+**Hendrik Schilling** developed the fusion of NG and Delta3D, hybrid predictor
+selection, frame and container formats, presets, and subsequent compression
+and performance optimization work.

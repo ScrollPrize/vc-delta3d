@@ -54,11 +54,9 @@ decoded voxels with hashes recorded by the saved baseline decoder.
 `check_headers.py` orchestrates all 576 cases. Zstd is linked only to this test
 executable, to read the old fixtures and provide a matched compression control.
 
-Historical header/selector prototype sources have been removed from this
-checkout. All results remain in `experiments/`; recoverable sources are in:
-`/data/hendrik/compression_experiments/villa4/archives/selector_cleanup_20261103_v1/experiment_sources.tar.gz`.
-The production header is now `src/ng/header.c`; the archived general-header
-search implementation is not restored or needed to encode/decode new frames.
+Historical header/selector prototype sources are not part of this repository.
+The production header is `src/ng/header.c`; no experimental search
+implementation is needed to encode/decode frames.
 
 **Re-encoding note:** historical byte-parity harnesses predate the intentional
 format change and must not be used to demand experimental compatibility.
@@ -66,6 +64,27 @@ Only old Delta3D frames remain readable. `check_presets.py` exports exact source
 voxels using a separate saved baseline build, then checks fresh deterministic
 encoding and lossless decoding with all four current presets.
 
-Current commands/results: [header cleanup](../experiments/header_cleanup.md).
-Earlier selector measurements remain in `experiments/selector_retained.md`
-as historical results, not a description of the current frame.
+## Corpus-driven cleanup checks
+
+These tools accept external data paths explicitly; no machine-specific corpus
+or build directory is assumed. The cleanup checks use uint8 128³ raw chunks
+named `<sha256>.raw`.
+
+- `check_core_cleanup.py --build <build> --manifest <inputs.json>
+  --raw-dir <raw-directory> --output <results.jsonl>`: JSON input records
+  contain `group`, `name` and `sha256`. Historical names Fast/Slow/RC1/RC2
+  map to fast/medium/slow/slower. Optional `--compare` checks byte parity.
+- `check_decode_cleanup.py --before <build> --after <build>
+  --manifest <baseline.jsonl> --raw-dir <raw-directory>
+  --frames <frame-directory> --output <timings.jsonl>`: manifest records
+  contain `group`, `preset`, `sha256` and `encoded_hash`; frame files are
+  named `<encoded_hash>.bin`. Use `--export` to generate cached frames,
+  `--encode` for encoder timings and optional `--cpu` for Linux affinity.
+- `check_header_static.py --manifest <frames.jsonl> --output <results-directory>
+  --header-export <export-executable> --header-static <test-executable>`:
+  historical header-table analysis using externally supplied native tools.
+  Records contain `variant`, `frame_path`, `group` and `preset`; frame
+  basenames have a chunk identifier as their second underscore-separated field.
+
+Frozen corpora and historical executables are not distributed with the library.
+Use the native tests and Python tests for self-contained correctness checks.

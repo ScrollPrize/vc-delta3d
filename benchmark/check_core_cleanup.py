@@ -20,14 +20,15 @@ p.add_argument('--repetitions',type=int,default=1)
 p.add_argument('--cpu',type=int)
 p.add_argument('--compatible-build',type=Path,help='Old decoder for new frames; allow header-only changes')
 p.add_argument('--frames',type=Path,help='Cached previous frames for payload comparison')
+p.add_argument('--manifest',type=Path,required=True,help='JSON array of group/name/sha256 input records')
+p.add_argument('--raw-dir',type=Path,required=True,help='Directory containing <sha256>.raw chunks')
 a=p.parse_args()
 if a.cpu is not None:
     os.sched_setaffinity(0,{a.cpu})
-root=Path('/data/hendrik/compression_experiments/villa4')
 package=Path(__file__).resolve().parents[1]/'python/vc_delta3d'
 s=importlib.util.spec_from_file_location('vc_delta3d',package/'__init__.py',submodule_search_locations=[str(a.build.resolve()),str(package)])
 codec=importlib.util.module_from_spec(s);sys.modules['vc_delta3d']=codec;s.loader.exec_module(codec)
-rows=json.loads((root/'encoder_speed/release_fixed_presets_20261101/results.json').read_text())
+rows=json.loads(a.manifest.read_text())
 names={'Fast':'fast','Slow':'medium','RC1':'slow','RC2':'slower'}
 rows=[r for r in rows if r['name'] in names]
 previous={(r['sha256'],r['preset']):r for r in map(json.loads,a.compare.open())} if a.compare else {}
@@ -39,7 +40,7 @@ if a.compatible_build:
     old_decode.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_size_t]
     old_decode.restype=ctypes.c_int
 def run(r):
-    raw=(root/'encoder_speed/header_clean_presets_20261103/raw'/(r['sha256']+'.raw')).read_bytes()
+    raw=(a.raw_dir/(r['sha256']+'.raw')).read_bytes()
     assert hashlib.sha256(raw).hexdigest()==r['sha256']
     x=np.frombuffer(raw,np.uint8).reshape((128,)*3);c=codec.Delta3D(predictor=names[r['name']])
     enc=[];dec=[];first=None

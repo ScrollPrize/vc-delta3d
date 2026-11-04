@@ -19,23 +19,24 @@ p.add_argument('--before',type=Path,required=True)
 p.add_argument('--after',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--frames',type=Path,required=True)
+p.add_argument('--manifest',type=Path,required=True,help='JSONL records with group/preset/sha256/encoded_hash')
+p.add_argument('--raw-dir',type=Path,required=True,help='Directory containing <sha256>.raw chunks')
 p.add_argument('--export',action='store_true')
 p.add_argument('--repetitions',type=int,default=8)
-p.add_argument('--cpu',type=int,default=64)
+p.add_argument('--cpu',type=int,help='Optional Linux CPU affinity')
 p.add_argument('--group',help='Optional isolation subset; final validation uses all groups')
 p.add_argument('--preset',choices=['fast','medium','slow','slower'],help='Isolate a preset when checking a borderline regression')
 p.add_argument('--encode',action='store_true',help='Alternate native encoder calls instead of decoder calls')
 a=p.parse_args()
-root=Path('/data/hendrik/compression_experiments/villa4')
 package=Path(__file__).resolve().parents[1]/'python/vc_delta3d'
 def load(name,path):
     s=importlib.util.spec_from_file_location(name,package/'__init__.py',submodule_search_locations=[str(path.resolve()),str(package)])
     m=importlib.util.module_from_spec(s);sys.modules[name]=m;s.loader.exec_module(m);return m
-rows=[json.loads(s) for s in (root/'encoder_speed/final_cleanup_20261103/speed_before.jsonl').read_text().splitlines()]
+rows=[json.loads(s) for s in a.manifest.read_text().splitlines()]
 if a.group:rows=[r for r in rows if r['group']==a.group]
 if a.preset:rows=[r for r in rows if r['preset']==a.preset]
 def frame_path(r):return a.frames/(r['encoded_hash']+'.bin')
-def raw(r):return (root/'encoder_speed/header_clean_presets_20261103/raw'/(r['sha256']+'.raw')).read_bytes()
+def raw(r):return (a.raw_dir/(r['sha256']+'.raw')).read_bytes()
 if a.export:
     before=load('codec_before',a.before)
     a.frames.mkdir(parents=True,exist_ok=True)
@@ -63,7 +64,7 @@ else:
                      ctypes.POINTER(ctypes.c_void_p),ctypes.POINTER(ctypes.c_size_t)]
         fn.restype=ctypes.c_int
         lib.vc_free.argtypes=[ctypes.c_void_p]
-    os.sched_setaffinity(0,{a.cpu})
+    if a.cpu is not None:os.sched_setaffinity(0,{a.cpu})
     a.output.parent.mkdir(parents=True,exist_ok=True)
     with a.output.open('w') as f:
         for r in rows:

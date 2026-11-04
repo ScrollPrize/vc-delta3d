@@ -126,12 +126,13 @@ rejects these inputs instead. Old experimental containers are not supported.
 
 ## Build and validation
 
-From this checkout, using the existing configured Release build:
+From the repository root, after configuring a Release build with native tests
+and `VC_DELTA3D_MODERN_SMOKE=ON`:
 
 ```sh
-cmake --build /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only -j8
-ctest --test-dir /data/hendrik/compression_experiments/villa4/builds/delta3d-c-only --output-on-failure
-/data/hendrik/compression_experiments/villa4/builds/delta3d-c-only/vc_delta3d_modern_smoke
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/vc_delta3d_modern_smoke
 ```
 
 Python regression coverage is in tests/test_indexed.py, alongside the existing

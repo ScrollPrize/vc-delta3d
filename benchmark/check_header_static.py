@@ -1,14 +1,20 @@
 """Orchestrate native header tests; no entropy coding in Python."""
+import argparse
 import concurrent.futures
 import json
 import os
 from pathlib import Path
 import subprocess
 
-ROOT = Path('/data/hendrik/compression_experiments/villa4')
-OUT = ROOT / 'encoder_speed/header_static_20261103'
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('--manifest', type=Path, required=True, help='JSONL frame records: variant, frame_path, group, preset')
+p.add_argument('--output', type=Path, required=True)
+p.add_argument('--header-export', type=Path, required=True)
+p.add_argument('--header-static', type=Path, required=True)
+a = p.parse_args()
+OUT = a.output
 OUT.mkdir(parents=True, exist_ok=True)
-rows = [json.loads(s) for s in (ROOT / 'encoder_speed/header_payload_only_20261103/results.jsonl').read_text().splitlines()]
+rows = [json.loads(s) for s in a.manifest.read_text().splitlines()]
 rows = [r for r in rows if r['variant'] == rows[0]['variant']]
 presets = ['fast', 'medium', 'slow', 'slower']
 # Chunk hash, not preset, determines fold. Balance 4/4 within each channel.
@@ -21,7 +27,7 @@ folds = {(g, c): i % 2 for g, cs in groups.items() for i, c in enumerate(sorted(
 def export(pair):
     i, r = pair
     path = OUT / f'{i}.header'
-    p = subprocess.run([str(ROOT / 'builds/header-export'), r['frame_path']],
+    p = subprocess.run([str(a.header_export.resolve()), r['frame_path']],
                        env={**os.environ, 'HEADER_EXPORT': str(path)}, capture_output=True, text=True, check=True)
     predictor = int(p.stderr.strip().split('=')[-1])
     r.update(index=i, fold=folds[r['group'], r['chunk']], predictor=predictor)
@@ -31,7 +37,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
     manifest = list(ex.map(export, enumerate(rows)))
 (OUT / 'manifest.txt').write_text(''.join(manifest))
 (OUT / 'inputs.json').write_text(json.dumps(rows, indent=2))
-p = subprocess.run([str(ROOT / 'builds/header-static'), str(OUT / 'manifest.txt')], capture_output=True, text=True, check=True)
+p = subprocess.run([str(a.header_static.resolve()), str(OUT / 'manifest.txt')], capture_output=True, text=True, check=True)
 (OUT / 'results.jsonl').write_text(p.stdout)
 results = [json.loads(s) for s in p.stdout.splitlines()]
 names = ['global', 'preset', 'dominant predictor', 'preset + dominant predictor']

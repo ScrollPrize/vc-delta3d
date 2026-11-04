@@ -117,5 +117,6 @@ Floating-point contraction remains disabled to preserve fitted weights.
 [BENCHMARKS.md](BENCHMARKS.md) contains the historical 18-group comparison
 against original NG, Delta3D, LPC, Blosc and Zstd. Historical rows describing
 removed presets are reference measurements, not supported options.
-[task.md](task.md) records the C port, byte-parity checks, commands and remaining
-validation work. All experimental data/build output belongs outside the checkout.
+[C_PORT_RESULTS.md](C_PORT_RESULTS.md) records the C-port validation and
+measurements. See [benchmark/README.md](benchmark/README.md) for validation
+commands. Keep generated benchmark data and results outside the checkout.

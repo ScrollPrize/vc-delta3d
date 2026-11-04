@@ -94,6 +94,6 @@ layout, while wire compression omits redundant fields. No Zstd is linked.
 
 ## Validation and comparison
 
-See `experiments/header_cleanup.md`. The native frozen-frame importer exists
+The native frozen-frame importer exists
 only in the benchmark: it is not linked into the production library. Old
 experimental bytes need conversion/re-encoding, not a compatibility decoder.
