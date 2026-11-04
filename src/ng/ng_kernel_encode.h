@@ -258,6 +258,8 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
         VCN_LC_PASS1(pre, br, w, Q, er);
         /* activity histogram and the sums of 256 v - P per activity value */
         for (int x = 0; x < VCN_LC_D; x++) {
+          /* Calibrate only on fitted targets; bypassed blocks must not bias the correction. */
+          if (cf->fit_mask && !cf->fit_mask[o+x]) continue;
           const int a = ap[x], q = 0;
           h[q][a]++, sa[q][a] += (int16_t)(uint16_t)(br[x] * 256u - Q[x]);
         }
@@ -269,6 +271,10 @@ static vcn_status vcn_lc_encode_ex(const uint8_t *src, const vcn_lc_cfg *cf, uin
      so the order of the sums does not matter) */
   {
     uint64_t acc = 0, calibration_count=NV;
+    if(cf->fit_mask){
+      calibration_count=0;
+      for(int a=0;a<VCN_LC_AMAX;a++)calibration_count+=h[0][a];
+    }
 
     int k = 0;
     for (int v = 0; v < VCN_LC_AMAX && k < K - 1; v++) {
