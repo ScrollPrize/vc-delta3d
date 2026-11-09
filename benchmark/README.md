@@ -1,12 +1,13 @@
 # VC-Delta3D benchmark harness
 
 Benchmarks the codec against real chunks pulled from a zarr v2 store on S3
-(anonymous access). Chunks are cached under `benchmark/.cache/`, so only
-the first run for a store touches the network.
+(anonymous access). Chunks and the benchmark build are cached under
+`benchmark/.cache/` (tagged with `CACHEDIR.TAG`), so only the first run for a
+store touches the network.
 
 ```sh
 python3 run.py s3://vesuvius-challenge-open-data/PHercParis4/volumes/20260411134726-2.400um-0.2m-78keV-masked.zarr \
-    --chunks 50 --levels 6
+    --chunks 50 --levels 6 --preset fast
 ```
 
 Per level it samples `--chunks` full, nonzero chunks (≥5% nonzero voxels by
@@ -15,87 +16,16 @@ compression ratio and best-of-`--reps` single-threaded encode/decode
 throughput.
 
 Requires `numpy` and `s3fs` (plus `numcodecs` if the store is compressed),
-and `g++` to build the C++ harness on first run. Supports 3D uint8/uint16
+`cmake` and `g++` to build the library and C++ harness. Supports 3D uint8/uint16
 arrays, either a bare zarr array or a `0..N` multiscale pyramid group.
 
 Keep `--seed` fixed (default) so reruns reuse the cached chunk sample.
 
-## C-port regression and timing checks
+## Header table generator
 
-These drivers only orchestrate native codec calls. They never implement a
-predictor, fitting or entropy coder in Python. Keep frozen frames and generated
-reports in an external experiment directory, not the source checkout.
+`header_static.c` generated the fixed header frequency tables in
+`src/ng/header_tables.h` from a list of encoded frames. It includes
+`src/ng/header.c` directly and is not part of the library build.
 
-```sh
-python benchmark/verify_port.py --build <port-build> --frames <frozen-results.json>
-python benchmark/verify_legacy.py --baseline <original-build> --build <port-build>
-python benchmark/compare_port.py --baseline <original-build> --build <port-build> \
-  --frames <frozen-results.json> --output <experiment-dir> --cpu 97 --repetitions 3
-```
-
-The comparison decodes the same frozen frames, verifies original raw SHA256 and
-byte-identical re-encoding, then measures each group/preset on one CPU. Timings
-exclude file reads and verification. Separate processes prevent baseline/port
-symbol interposition. JSON records every repetition and load average; the report
-uses MiB/s and includes combined min/median/max. `--cpu` is Linux-only; omit it on
-macOS. Use `--report-only` with the same output directory to regenerate the report
-without any codec work. Do not rebuild or overwrite the original build.
-
-## Retained selector codec
-
-The selected implementation is `src/ng/selector.c`: whole-map choice between
-previous-ID contexts and bit-packed LZ, using one small-state rANS backend.
-No local switching, alternate context order, literal contexts or search presets.
-See [format and validation](../SELECTOR_FORMAT.md).
-
-`header_check.c` imports frozen test frames outside the production library,
-checks retained selector sizes and compact-header round trips, and compares
-decoded voxels with hashes recorded by the saved baseline decoder.
-`check_headers.py` orchestrates all 576 cases. Zstd is linked only to this test
-executable, to read the old fixtures and provide a matched compression control.
-
-Historical header/selector prototype sources are not part of this repository.
-The production header is `src/ng/header.c`; no experimental search
-implementation is needed to encode/decode frames.
-
-**Re-encoding note:** historical byte-parity harnesses predate the intentional
-format change and must not be used to demand experimental compatibility.
-Only old Delta3D frames remain readable. `check_presets.py` exports exact source
-voxels using a separate saved baseline build, then checks fresh deterministic
-encoding and lossless decoding with all four current presets.
-
-## Corpus-driven cleanup checks
-
-These tools accept external data paths explicitly; no machine-specific corpus
-or build directory is assumed. The cleanup checks use uint8 128³ raw chunks
-named `<sha256>.raw`.
-
-- `check_core_cleanup.py --build <build> --manifest <inputs.json>
-  --raw-dir <raw-directory> --output <results.jsonl>`: JSON input records
-  contain `group`, `name` and `sha256`. Historical names Fast/Slow/RC1/RC2
-  map to fast/medium/slow/slower. Optional `--compare` checks byte parity.
-- `check_decode_cleanup.py --before <build> --after <build>
-  --manifest <baseline.jsonl> --raw-dir <raw-directory>
-  --frames <frame-directory> --output <timings.jsonl>`: manifest records
-  contain `group`, `preset`, `sha256` and `encoded_hash`; frame files are
-  named `<encoded_hash>.bin`. Use `--export` to generate cached frames,
-  `--encode` for encoder timings and optional `--cpu` for Linux affinity.
-- `check_header_static.py --manifest <frames.jsonl> --output <results-directory>
-  --header-export <export-executable> --header-static <test-executable>`:
-  historical header-table analysis using externally supplied native tools.
-  Records contain `variant`, `frame_path`, `group` and `preset`; frame
-  basenames have a chunk identifier as their second underscore-separated field.
-
-Frozen corpora and historical executables are not distributed with the library.
-Use the native tests and Python tests for self-contained correctness checks.
-
-For a fresh full-frame comparison, run `check_core_cleanup.py` with
-`--workers 1 --repetitions 3`, then `check_controls.py` with the same
-`--manifest` and `--raw-dir`, an explicit `--library` pointing to the
-historical native control fixture, and `--output <controls.jsonl>`.
-The latter measures legacy Delta3D, LPC, original NG, single-threaded Blosc
-(LZ4/Zstd level 5, byte shuffle) and Zstd level 3. The control fixture ABI
-is described in the script; it is not linked into the production library.
-Use `report_framed.py --presets <presets.jsonl> --controls <controls.jsonl>
---output <report.md>` for per-channel and aggregate sizes/speeds, including
-repeat statistics. The reporting tool expects the 18-group/eight-chunk corpus.
+The one-off C-port validation scripts were removed after the port was
+merged; see commit 93469eb for them and `C_PORT_RESULTS.md`.

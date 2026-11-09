@@ -9,9 +9,6 @@ The codec, fitting, SIMD kernels, entropy coding, framing and indexed containers
 are C. The C++ headers are ownership/error adapters over the C API. Python uses
 a thin nanobind adapter; it does not perform prediction or compression in Python.
 
-[C-port validation and measurements](C_PORT_RESULTS.md) includes the complete
-18-group before/after tables, compatibility checks and reproduction commands.
-
 ## Formats and compatibility
 
 - Lossless uint8 chunks with dimensions divisible by 32 use the preset encoder.
@@ -117,6 +114,6 @@ Floating-point contraction remains disabled to preserve fitted weights.
 [BENCHMARKS.md](BENCHMARKS.md) contains the historical 18-group comparison
 against original NG, Delta3D, LPC, Blosc and Zstd. Historical rows describing
 removed presets are reference measurements, not supported options.
-[C_PORT_RESULTS.md](C_PORT_RESULTS.md) records the C-port validation and
-measurements. See [benchmark/README.md](benchmark/README.md) for validation
-commands. Keep generated benchmark data and results outside the checkout.
+See [benchmark/README.md](benchmark/README.md) for the benchmark harness.
+The C-port validation record (`C_PORT_RESULTS.md`) and its one-off scripts
+are in git history (commit 93469eb).

@@ -9,7 +9,7 @@ run for a given store hits the network.
 
 Usage:
     python3 run.py s3://bucket/path/to/volume.zarr [--chunks 50]
-                   [--levels N] [--reps 5]
+                   [--levels N] [--reps 5] [--preset fast]
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--min-nonzero", type=float, default=0.05,
                     help="minimum nonzero-voxel fraction per chunk "
                          "(default 0.05)")
+    ap.add_argument("--preset", default="fast",
+                    choices=["delta", "fast", "medium", "slow", "slower"],
+                    help="encoder preset (default fast)")
     ap.add_argument("--seed", type=int, default=1234,
                     help="sampling seed, keep fixed for a stable cache")
     return ap.parse_args()
@@ -162,17 +165,37 @@ def fetch_level(fs, meta: dict, array_path: str, out_dir: Path,
               "nonzero chunks")
 
 
-def build_bench() -> Path:
-    exe = CACHE_ROOT / "bench"
-    sources = [BENCH_DIR / "bench.cpp", REPO_ROOT / "src" / "codec.cpp"]
-    headers = [REPO_ROOT / "include" / "vc_delta3d" / "codec.hpp"]
-    if exe.exists() and all(
-            exe.stat().st_mtime > s.stat().st_mtime
-            for s in sources + headers):
-        return exe
+CACHEDIR_TAG = ("Signature: 8a477f597d28d172789f06886806bc55\n"
+                "# This directory is a cache created by vc-delta3d/benchmark/run.py.\n"
+                "# See https://bford.ca/cachedir/\n")
+
+
+def ensure_cache_root() -> None:
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    tag = CACHE_ROOT / "CACHEDIR.TAG"
+    if not tag.exists():
+        tag.write_text(CACHEDIR_TAG)
+
+
+def build_bench() -> Path:
+    """Build the library (Release, via CMake) and link the C++ harness."""
+    ensure_cache_root()
+    build = CACHE_ROOT / "build"
+    subprocess.run(["cmake", "-S", str(REPO_ROOT), "-B", str(build),
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DVC_DELTA3D_BUILD_TESTS=OFF"],
+                   check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["cmake", "--build", str(build), "-j"], check=True,
+                   stdout=subprocess.DEVNULL)
+    lib = build / "libvc_delta3d.a"
+    exe = CACHE_ROOT / "bench"
+    sources = [BENCH_DIR / "bench.cpp", lib,
+               REPO_ROOT / "include" / "vc_delta3d" / "codec.hpp"]
+    if exe.exists() and all(exe.stat().st_mtime > s.stat().st_mtime
+                            for s in sources):
+        return exe
     cmd = ["g++", "-O3", "-std=c++20", "-I", str(REPO_ROOT / "include"),
-           *map(str, sources), "-o", str(exe)]
+           str(BENCH_DIR / "bench.cpp"), str(lib), "-o", str(exe)]
     print("building:", " ".join(cmd))
     subprocess.run(cmd, check=True)
     return exe
@@ -187,6 +210,7 @@ def main() -> None:
 
     import s3fs
     fs = s3fs.S3FileSystem(anon=True)
+    ensure_cache_root()
 
     levels = find_levels(fs, base, args.levels)
     print(f"{len(levels)} level(s), caching to {store_cache}")
@@ -197,7 +221,8 @@ def main() -> None:
 
     exe = build_bench()
     for name, _ in levels:
-        subprocess.run([str(exe), str(store_cache / name), str(args.reps)],
+        subprocess.run([str(exe), str(store_cache / name), str(args.reps),
+                        args.preset],
                        check=True)
 
 
