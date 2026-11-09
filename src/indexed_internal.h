@@ -1,12 +1,14 @@
 #pragma once
 #include "buffer.h"
 #include "ng/ng_frame.h"
-/* NGC2: one preorder template, consecutive lengths, consecutive payloads.
+/* NGI1: one preorder template, consecutive lengths, consecutive payloads.
  * Repeat nodes share geometry, never prediction state. All traversals are
  * iterative and expansion is bounded by the physically present length table. */
 #include <vc_delta3d/indexed.h>
 #include <stdlib.h>
 #include <string.h>
+#define VC_INDEX_MAGIC "NGI1"
+#define VC_INDEX_PREFIX 8u /* magic + u32 total header length */
 typedef struct { uint32_t origin[3],shape[3],channel,channels; } domain;
 typedef struct { unsigned tag; uint32_t value; size_t end; } node;
 typedef struct { domain d; size_t node; } job;

@@ -58,7 +58,7 @@ the selected preset. There is no alternate rectangular encoder policy. The
 reader and low-level frame machinery still support rectangular leaves and
 all documented block sizes.
 
-Public framing/dispatch lives in `../api.c`; compact NGC2 / extended NGX2
+Public framing/dispatch lives in `../api.c`; NGI1
 indexing is split between `../indexed_encode.c` and `../indexed_decode.c`, with
 shared tree geometry and expansion in `../indexed_internal.h`.
 Legacy Delta3D uses shared `../delta_filter.c`, `../rans.c`, `../legacy.c`.

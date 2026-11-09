@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+static size_t varint(uint8_t*p,uint64_t v){size_t n=0;do{p[n++]=(uint8_t)((v&127)|(v>127?128:0));v>>=7;}while(v);return n;}
 int main(void) {
     size_t n=32u*32*32;
     uint8_t *src=malloc(4*n),*decoded=malloc(4*n); assert(src&&decoded);
@@ -63,7 +64,13 @@ int main(void) {
     uint32_t rs[3]={32,32,64};
     assert(vc_indexed_encode(src,4*n,rs,2,0,VC_FAST,repeat,3,&frame,&bytes));
     assert(vc_decompress(frame,bytes,decoded,4*n)&&!memcmp(src,decoded,4*n));
-    uint32_t hn=vc_indexed_header_size(frame,bytes);assert(hn==32);
+    uint32_t hn=vc_indexed_header_size(frame,bytes);
+    {   /* prefix 8, flags 1, dims 3, channels 1, repeat 2, repeat 2, leaf 1, varint lengths */
+        vc_chunk_index idx;assert(vc_index_read(frame,bytes,bytes,&idx)&&idx.leaf_count==4);
+        size_t expected=18;uint8_t tmp[10];
+        for(size_t i=0;i<4;i++)expected+=varint(tmp,idx.leaves[i].length);
+        assert(hn==expected);vc_index_free(&idx);
+    }
     for(size_t cut=0;cut<hn;cut++){vc_chunk_index idx;assert(!vc_index_read(frame,cut,bytes,&idx));}
     for(size_t i=0;i<hn;i++)for(unsigned b=0;b<8;b++){
         vc_chunk_index idx;frame[i]^=(uint8_t)(1u<<b);
@@ -71,13 +78,14 @@ int main(void) {
         frame[i]^=(uint8_t)(1u<<b);
     }
     vc_free(frame);
-    /* Extended 64-bit lengths and implicit offsets without large allocation. */
-    uint8_t ext[47]={0};memcpy(ext,"NGX2",4);ext[4]=47;ext[21]=1;
-    ext[25]=7;ext[26]=1;ext[30]=8;ext[31]=11;ext[35]=1;ext[39]=4;
-    vc_chunk_index large;uint64_t long_leaf=(UINT64_C(1)<<32)+11;
-    assert(vc_index_read(ext,sizeof(ext),47+long_leaf+4,&large));
-    assert(large.leaf_count==2&&large.leaves[1].offset==47+long_leaf);vc_index_free(&large);
-    ext[35]=255;assert(!vc_index_read(ext,sizeof(ext),47+long_leaf+4,&large));
+    /* 64-bit lengths and implicit offsets without large allocation. */
+    uint8_t ext[32]={'N','G','I','1',0,0,0,0, 0, 0,0,0, 1, 7,1, 8};size_t en=16;
+    uint64_t long_leaf=(UINT64_C(1)<<32)+11;
+    en+=varint(ext+en,long_leaf);en+=varint(ext+en,4);ext[4]=(uint8_t)en;
+    vc_chunk_index large;
+    assert(vc_index_read(ext,en,en+long_leaf+4,&large));
+    assert(large.leaf_count==2&&large.leaves[1].offset==en+long_leaf);vc_index_free(&large);
+    ext[en-1]=5;assert(!vc_index_read(ext,en,en+long_leaf+4,&large));
     memset(src,0,n);
     for(unsigned p=VC_FAST;p<=VC_SLOWER;++p){
         opt.preset=(vc_preset)p;

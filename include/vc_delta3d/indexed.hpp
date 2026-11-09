@@ -32,7 +32,7 @@ struct ChunkIndex {
     std::vector<IndexedLeaf> leaves;
 };
 
-// NGC2 compact / NGX2 extended. Read >=8 bytes; nullopt means invalid/incomplete.
+// NGI1 index. Read >=8 bytes; nullopt means invalid/incomplete.
 // Read the rest of this many header bytes, then inspect without any payload.
 std::optional<std::uint32_t> indexedHeaderSize(std::span<const std::byte> prefix);
 // Validates tree coverage, geometry, codecs, offsets and exact object length.

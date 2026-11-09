@@ -58,15 +58,15 @@ static void run(unsigned edge,unsigned nm,unsigned banks,unsigned K,unsigned mod
     assert(!memcmp(src,out,n));
     if(X!=Y){
         /* Reader supports rectangular leaves independently of encoder policy. */
-        size_t total=16+bytes-4;uint8_t *indexed=calloc(total,1);assert(indexed);
-        memcpy(indexed,"NGC2",4);indexed[4]=16;indexed[7]=Z/32-1;
-        indexed[8]=Y/32-1;indexed[9]=X/32-1;indexed[11]=8;
-        for(unsigned k=0;k<4;k++)indexed[12+k]=(uint8_t)((bytes-4)>>(8*k));
-        memcpy(indexed+16,frame+4,bytes-4);
+        uint8_t prefix[24]={'N','G','I','1',0,0,0,0, 0,(uint8_t)(Z/32-1),(uint8_t)(Y/32-1),(uint8_t)(X/32-1),0,8};
+        size_t hn=14,len=bytes-4;do{prefix[hn++]=(uint8_t)((len&127)|(len>127?128:0));len>>=7;}while(len);
+        prefix[4]=(uint8_t)hn;
+        size_t total=hn+bytes-4;uint8_t *indexed=calloc(total,1);assert(indexed);
+        memcpy(indexed,prefix,hn);memcpy(indexed+hn,frame+4,bytes-4);
         assert(vc_decompress(indexed,total,out,n)&&!memcmp(src,out,n));
-        vc_chunk_index index;assert(vc_index_read(indexed,16,total,&index));
+        vc_chunk_index index;assert(vc_index_read(indexed,hn,total,&index));
         assert(index.leaf_count==1);
-        assert(vc_indexed_leaf_decode(indexed+16,bytes-4,index.leaves,out,n)&&!memcmp(src,out,n));
+        assert(vc_indexed_leaf_decode(indexed+hn,bytes-4,index.leaves,out,n)&&!memcmp(src,out,n));
         vc_index_free(&index);free(indexed);
     }
     free(frame);free(activity);free(sel);free(cl);free(sy);free(out);free(src);

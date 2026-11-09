@@ -1,4 +1,5 @@
 #include "indexed_internal.h"
+#include "reader.h"
 static int plan_tree(domain root,const vc_partition_node*plan,size_t nodes,node**out,size_t*count) {
     domain*stack=NULL;node*t=NULL;size_t cap=0,tc=0,pending=0,used=0,step=0;
     if(!vc_reserve(&stack,&cap,1,sizeof(*stack)))goto fail;stack[pending++]=root;
@@ -34,11 +35,6 @@ int vc_indexed_encode(const uint8_t*input,size_t input_size,const uint32_t shape
     node*t=NULL;size_t nt=0,nl=0;vc_indexed_leaf*leaves=NULL;
     vc_buffer payload={0},header={0};uint8_t*scratch=NULL;size_t scratch_cap=0;
     if(!plan_tree(root,plan,nodes,&t,&nt)||!expand(t,root,input_size/32768,&leaves,&nl))goto fail;
-    int wide=channels>256;
-    for(unsigned a=0;a<3;a++)if(shape[a]/32>256)wide=1;
-    for(size_t i=0;i<nt;i++)if(t[i].tag!=8){
-        uint32_t v=t[i].value;if(t[i].tag<3)v/=32;if(v>256)wide=1;
-    }
     for(size_t i=0;i<nl;i++){
         vc_indexed_leaf*l=leaves+i;uint64_t vox;if(!voxels(l->shape,&vox)||vox>SIZE_MAX)goto fail;
         size_t n=(size_t)vox;const uint8_t*src;
@@ -59,21 +55,17 @@ int vc_indexed_encode(const uint8_t*input,size_t input_size,const uint32_t shape
         if(rc||bytes<8||bytes>payload.capacity-payload.size||memcmp(dst,"NCF1",4))goto fail;
         /* Embedded leaves share the container's codec identity. */
         memmove(dst,dst+4,bytes-4);l->length=bytes-4;payload.size+=bytes-4;
-        if(l->length>UINT32_MAX)wide=1;
     }
-write_header:
-    header.size=0;
-    if(!vc_buffer_append(&header,wide?"NGX2":"NGC2",4)||!vc_buffer_put(&header,0,wide?4:2)||!vc_buffer_put(&header,layout,1))goto fail;
-    for(unsigned a=0;a<3;a++)if(!vc_buffer_put(&header,shape[a]/32-1,wide?4:1))goto fail;
-    if(!vc_buffer_put(&header,channels-1,wide?4:1))goto fail;
+    if(!vc_buffer_append(&header,VC_INDEX_MAGIC,4)||!vc_buffer_put(&header,0,4)||!vc_buffer_put(&header,layout,1))goto fail;
+    for(unsigned a=0;a<3;a++)if(!vc_varput(&header,shape[a]/32-1))goto fail;
+    if(!vc_varput(&header,channels-1))goto fail;
     for(size_t i=0;i<nt;i++){
         if(!vc_buffer_put(&header,t[i].tag,1))goto fail;
         if(t[i].tag!=8){uint32_t v=t[i].value;if(t[i].tag<3)v/=32;
-            if(!vc_buffer_put(&header,v-1,wide?4:1))goto fail;}
+            if(!vc_varput(&header,v-1))goto fail;}
     }
-    for(size_t i=0;i<nl;i++)if(!vc_buffer_put(&header,leaves[i].length,wide?8:4))goto fail;
-    if(!wide&&header.size>UINT16_MAX){wide=1;goto write_header;}
-    if(header.size>UINT32_MAX)goto fail;write_le(header.data+4,header.size,wide?4:2);
+    for(size_t i=0;i<nl;i++)if(!vc_varput(&header,leaves[i].length))goto fail;
+    if(header.size>UINT32_MAX)goto fail;write_le(header.data+4,header.size,4);
     if(!vc_buffer_append(&header,payload.data,payload.size))goto fail;
     free(t);free(leaves);free(scratch);free(payload.data);*output=header.data;*output_size=header.size;return 1;
 fail:free(t);free(leaves);free(scratch);free(payload.data);free(header.data);return 0;
