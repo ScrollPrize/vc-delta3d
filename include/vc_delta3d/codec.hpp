@@ -53,7 +53,7 @@ namespace vc_delta3d {
 //
 // Predictor applied before entropy coding (header byte 7, bits 0-3).
 // Delta explicitly retains the legacy algorithm and version-1 frame.
-// Presets emit NCF1 for scalar cubes and NGC2 for indexed spatial/channel
+// Presets emit NCF1 for scalar cubes and NGI1 for indexed spatial/channel
 // partitions. Regular APIs fall back to legacy Delta/D3D1 for 16-bit data,
 // quantization, or dimensions not divisible by32; invalid inputs still fail.
 enum class Predictor { Delta = 1, Fast = 3, Medium = 4,
@@ -103,7 +103,7 @@ inline constexpr int kQuantizationMaxError2 = 5;
 // Compresses one decoded chunk of shapeZYX elements of elemSize bytes.
 // quantBinWidth 1 is lossless; larger widths quantize first (see above).
 // Presets require elemSize=1, quant=1 and32-aligned dimensions;
-// non-cubic/large shapes use the NGC2 indexed spatial container.
+// non-cubic/large shapes use the NGI1 indexed spatial container.
 // Throws std::invalid_argument unless input.size() equals z*y*x*elemSize
 // with elemSize 1 or 2, and quantBinWidth is in [1, 255].
 std::vector<std::byte> compress(std::span<const std::byte> input,
@@ -117,7 +117,7 @@ std::vector<std::byte> compress(std::span<const std::byte> input,
 std::optional<Predictor> predictor(std::span<const std::byte> input);
 
 // Compresses one chunk of `channels` fields of shapeZYX elements, laid out as
-// `layout` says, into NGC2 for presets or the legacy version-2 D3D1
+// `layout` says, into NGI1 for presets or the legacy version-2 D3D1
 // container for explicit Delta. The two paths do not mix. quantBinWidth and
 // predictor apply to every channel. Throws std::invalid_argument unless
 // input.size() equals channels*z*y*x*elemSize with channels >= 1 and elemSize
@@ -130,7 +130,7 @@ std::vector<std::byte> compressChannels(std::span<const std::byte> input,
                                         int quantBinWidth = kQuantizationLossless,
                                         Predictor predictor = Predictor::Fast);
 
-// Channel count:1 for scalar D3D1/NCF1; C for D3D1-v2 or NGC2;
+// Channel count:1 for scalar D3D1/NCF1; C for D3D1-v2 or NGI1;
 // std::nullopt for unsupported/malformed headers. The decoded size of a payload
 // is channels * z * y * x * elementSize.
 std::optional<int> channelCount(std::span<const std::byte> input);
@@ -159,7 +159,7 @@ std::optional<int> quantization(std::span<const std::byte> input);
 // tell whether re-encoding a payload could still shrink it.
 std::optional<int> deltaMask(std::span<const std::byte> input);
 
-// Decompresses D3D1(version1/2), NCF1, or NGC2 whose
+// Decompresses D3D1(version1/2), NCF1, or NGI1 whose
 // decoded size must equal expectedSize.
 // Returns std::nullopt on any error or size mismatch.
 std::optional<std::vector<std::byte>> decompress(

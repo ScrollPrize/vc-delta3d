@@ -13,10 +13,10 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 
 - Lossless uint8 chunks with dimensions divisible by 32 use the preset encoder.
   Scalar cubes emit **NCF1 directly**, without another envelope.
-- Multiple channels and spatial partitions use **NGC2** compact or **NGX2**
-  extended fixed-width indexes. Repeated subtrees share partition geometry.
-  Leaves use NCF1 coding without redundant leaf magic. Eight full-volume
-  channels cost46index bytes plus32leaf-prefix bytes. See `INDEXED_FORMAT.md`.
+- Multiple channels and spatial partitions use the **NGI1** varint index.
+  Repeated subtrees share partition geometry. Leaves use NCF1 coding without
+  redundant leaf magic. Eight full-volume 128³ channels cost 40 index bytes
+  plus 32 leaf-prefix bytes. See `INDEXED_FORMAT.md`.
 - `predictor="delta"` explicitly selects the original Delta3D algorithm and
   **D3D1** frame. Regular APIs also fall back to this complete legacy path for
   uint16/int16 data, quantization, or positive dimensions not divisible by 32.

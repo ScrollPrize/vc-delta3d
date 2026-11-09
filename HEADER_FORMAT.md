@@ -16,8 +16,8 @@ The current encoder policies are not part of the wire format.
 Eight-byte prefix. No uncompressed header length, extra envelope, alignment
 padding, historical version switch or Zarr-side per-chunk metadata. Selector
 length is in the header; residual length is the remaining frame size. Cubic
-and rectangular leaves use the same frame. NGC2 supplies the optional
-channel/spatial random-access index (NGC2 compact / NGX2 extended), not an
+and rectangular leaves use the same frame. NGI1 supplies the optional
+channel/spatial random-access index, not an
 alternative leaf codec. Indexed leaves omit only the four-byte NCF1 magic;
 their header length and subsequent payload use the same parser and decoder.
 

@@ -1,31 +1,24 @@
-# Compact / extended indexed channel and spatial container
+# NGI1 indexed channel and spatial container
 
-One tree grammar, with two fixed-width representations. No varints, explicit
-payload offsets, alignment padding, historical container readers, or D3D1
-children. Only original Delta3D retains compatibility. The magic selects every
-field width in the container; it does not select a different codec or preset.
+One tree grammar with one representation. The total header length is a fixed
+u32 so a reader learns it from the first 8 bytes; every other integer is an
+unsigned LEB128 varint (7 bits per byte, low group first). No payload offsets,
+alignment padding, historical container readers, or D3D1 children. Only original
+Delta3D retains compatibility. The magic does not select a codec or preset.
 
 ## Prefix
 
-| Field | Compact NGC2 | Extended NGX2 |
-|---|---:|---:|
-| Magic/version |4|4|
-| Total header length including prefix |2|4|
-| Flags: bit0 channels-last, others zero |1|1|
-| Root Z, Y, X: each dimension/32 minus one |3 ×1|3 ×4|
-| Channel count minus one |1|4|
-| **Total prefix** |**11 B**|**25 B**|
+| Field | Encoding |
+|---|---|
+| Magic `NGI1` | 4 bytes |
+| Total header length including prefix | u32 LE |
+| Flags: bit0 channels-last, others zero | 1 byte |
+| Root Z, Y, X: each dimension/32 minus one | 3 varints |
+| Channel count minus one | varint |
 
-All integers are unsigned little-endian. Spatial dimensions must be multiples
-of32. Compact root dimensions cover32..8192 and channels1..256. Extended dimensions
-are also in units32, but reconstructed dimensions must fit uint32. Current APIs
-limit channels to INT32_MAX and decoded size to SIZE_MAX.
-
-The encoder selects extended if any root dimension, channel count, tree operand,
-leaf length, or the total compact header length exceeds the compact field.
-Compact header length is at most65535. Extended header length is at mostUINT32_MAX.
-Reading8bytes suffices to discover either header length (compact needs only6).
-No fixed-size reserved header slab.
+Spatial dimensions must be multiples of 32 and fit uint32; channels are
+1..INT32_MAX. Current APIs limit decoded size to SIZE_MAX. Reading 8 bytes
+suffices to discover the header length. No fixed-size reserved header slab.
 
 ## Tree template
 
@@ -39,17 +32,16 @@ The prefix is followed by one preorder tree template:
 |7|Repeat channels|Repetition count minus one|
 |8|Leaf|None|
 
-Operands occupy1byte compact or4bytes extended. Spatial split values thus
-cover32..8192 in compact mode, including byte255 representing8192.
-Repeat counts cover2..256 in compact mode; stored zero (count1) is rejected.
+Operands are varints. Spatial split values are stored /32 minus one.
+Repeat counts are stored minus one; stored zero (count 1) is rejected.
 Other tags are invalid. A binary split has two child templates. A repeat has
 exactly one child template, instantiated into equal disjoint regions along its
 axis. The parent extent must divide exactly; spatial children remain32-aligned.
 Every leaf has exactly one channel. All other extents are inherited.
 
 The template ends after its complete root subtree. No explicit template length
-or node count is necessary. It is followed by one length per **expanded leaf**,
-4bytes compact or8bytes extended. Payloads follow immediately in the same order.
+or node count is necessary. It is followed by one varint length per **expanded leaf**
+(up to 64 bits). Payloads follow immediately in the same order.
 Offsets are the cumulative sum of lengths starting at the header end, always
 using64-bit arithmetic. The final leaf must end exactly at the object end.
 
@@ -76,16 +68,17 @@ be passed to decodeIndexedLeaf, not the standalone-frame decoder.
 For a tree with B binary nodes, R repeat nodes, T template leaf nodes and L
 expanded payload leaves:
 
-- Compact index:11 +2B +2R +T +4L bytes.
-- Extended index:25 +5B +5R +T +8L bytes.
-- Embedded leaf prefixes:another4L bytes.
+- Index: 13 + 2B + 2R + T bytes plus one varint per leaf length (3 bytes for
+  leaves of 16 KiB to 2 MiB), assuming dimensions below 4096, fewer than 129
+  channels and split/repeat operands below 128; larger values take more varint bytes.
+- Embedded leaf prefixes: another 4L bytes.
 - Model/entropy headers and selector/residual data are additional.
 
-Eight full-volume channels: one repeat, one template leaf, eight lengths:
-**46-byte index +32-byte leaf prefixes =78 bytes total framing**.
-The corresponding extended framing is127bytes.
-Previous framing used259bytes; original Delta3D uses216bytes for the same
-channel count (excluding its probability tables and states).
+Eight full-volume 128³ channels (leaves of 16 KiB to 2 MiB): one repeat, one
+template leaf, eight lengths: **40-byte index + 32-byte leaf prefixes = 72 bytes
+total framing**. The former NGC2/NGX2 layouts needed 78/127 bytes; original
+Delta3D uses 216 bytes for the same channel count (excluding its probability
+tables and states).
 
 Standalone scalar NCF1 retains its8-byte magic/length prefix, with no container.
 Data is uint8/lossless. Rectangular leaf limits remain X<=1024 and Y*Z<=65536,
@@ -108,8 +101,8 @@ Example: three channels each with two Z regions and two X regions:
 `[(8,3),(5,2),(7,2),(4,0)]`.
 This has four template nodes but twelve independently encoded leaves.
 
-The existing C/C++/Python index APIs recognize both magics:
-indexed_header_size, read_index, decode_indexed_leaf.
+The C/C++/Python index APIs are indexed_header_size, read_index and
+decode_indexed_leaf. The former NGC2/NGX2 containers are not readable.
 Fetch an initial range (at least8bytes), extend it if necessary to header length,
 then fetch only the selected leaf. All dimensions, layout, lengths and
 partitions are stored in the object; Zarr metadata needs no extra information.
@@ -136,8 +129,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 Python regression coverage is in tests/test_indexed.py, alongside the existing
-test_python.py, test_modern.py and test_fallback.py suites. With the built native
-module loaded, all 139 tests pass. Native CTest 7/7 passes; the sanitizer build
+test_python.py, test_modern.py and test_fallback.py suites. The sanitizer build
 exercises truncated/mutated indexes, repeat expansion and64-bit ranges.
 Framing-byte counts above are exact structural sizes, not throughput claims.
 No macOS/ARM hardware test was performed in this session.

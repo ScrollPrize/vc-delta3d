@@ -9,7 +9,7 @@
 
 namespace vc_delta3d {
 namespace detail {
-inline void check(bool ok){if(!ok)throw std::invalid_argument("invalid NGC2 index/partition");}
+inline void check(bool ok){if(!ok)throw std::invalid_argument("invalid NGI1 index/partition");}
 }
 
 inline std::optional<std::uint32_t> indexedHeaderSize(std::span<const std::byte> b){
