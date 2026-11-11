@@ -159,6 +159,43 @@ static inline void ng_bank_prepare_scalar(const uint8_t*row,const uint8_t*raw,co
 static inline ng_gv ng_gv_widen(const uint8_t*p){ng_gb b;memcpy(&b,p,8);return __builtin_convertvector(b,ng_gv);}
 static inline ng_gv ng_gv_halves(unsigned a,unsigned b){return (ng_gv){(uint16_t)a,(uint16_t)a,(uint16_t)a,(uint16_t)a,(uint16_t)b,(uint16_t)b,(uint16_t)b,(uint16_t)b};}
 #if VCN_HAVE_NEON
+/* vcn_lc_cls_neon for two parameter sets sharing one activity pass: the bias of
+ * p's classes is added to A (as VCN_LC_CLS(e,ri,p,A,...)), q's classes go to kc
+ * (as VCN_LC_CLS(e,ri,q,dummy,kc)). Both need K <= 16. */
+static inline uint8x16_t ng_cls_count_neon(uint16x8_t al,uint16x8_t ah,const vcn_lc_par*p){
+    const int nk=p->K-1;int tmax=0;
+    for(int k=0;k<nk;k++)tmax=p->thr[k]>tmax?p->thr[k]:tmax;
+    if(tmax<255){
+        const uint8x16_t a8=vcombine_u8(vqmovn_u16(al),vqmovn_u16(ah));uint8x16_t c=vdupq_n_u8(0);
+        for(int k=0;k<nk;k++)c=vsubq_u8(c,vcgtq_u8(a8,vdupq_n_u8((uint8_t)p->thr[k])));
+        return c;
+    }
+    uint16x8_t cl=vdupq_n_u16(0),ch=cl;
+    for(int k=0;k<nk;k++){const uint16x8_t t=vdupq_n_u16(p->thr[k]);cl=vsubq_u16(cl,vcgtq_u16(al,t));ch=vsubq_u16(ch,vcgtq_u16(ah,t));}
+    return vcombine_u8(vmovn_u16(cl),vmovn_u16(ch));
+}
+static void ng_cls2_neon(const uint8_t*e,size_t ri,const vcn_lc_par*p,uint16_t*restrict A,const vcn_lc_par*q,uint8_t*restrict kc){
+    const uint8_t*n=e+ri-VCN_LC_RP,*nn=e+ri-2*VCN_LC_RP,*u=e+ri-VCN_LC_SP,*uu=e+ri-2*VCN_LC_SP;
+    uint8_t lo[16]={0},hi[16]={0};
+    for(int k=0;k<p->K;k++)lo[k]=(uint8_t)p->cb[k],hi[k]=(uint8_t)((uint32_t)p->cb[k]>>8);
+    const uint8x16_t tlo=vld1q_u8(lo),thi=vld1q_u8(hi);
+    for(int x=0;x<VCN_LC_D;x+=16){
+        const uint8x16_t N=vld1q_u8(n+x),U=vld1q_u8(u+x),Nw=vld1q_u8(n+x-1),Ne=vld1q_u8(n+x+1),
+                         Uw=vld1q_u8(u+x-1),Ue=vld1q_u8(u+x+1),Un=vld1q_u8(u+x-VCN_LC_RP),
+                         Us=vld1q_u8(u+x+VCN_LC_RP),NN=vld1q_u8(nn+x),UU=vld1q_u8(uu+x);
+        uint16x8_t al=vaddl_u8(vget_low_u8(N),vget_low_u8(U)),ah=vaddl_high_u8(N,U);
+        al=vaddq_u16(al,al),ah=vaddq_u16(ah,ah);
+        al=vaddq_u16(al,vaddq_u16(vaddl_u8(vget_low_u8(Nw),vget_low_u8(Ne)),vaddl_u8(vget_low_u8(Uw),vget_low_u8(Ue))));
+        ah=vaddq_u16(ah,vaddq_u16(vaddl_high_u8(Nw,Ne),vaddl_high_u8(Uw,Ue)));
+        al=vaddq_u16(al,vaddq_u16(vaddl_u8(vget_low_u8(Un),vget_low_u8(Us)),vaddl_u8(vget_low_u8(NN),vget_low_u8(UU))));
+        ah=vaddq_u16(ah,vaddq_u16(vaddl_high_u8(Un,Us),vaddl_high_u8(NN,UU)));
+        const uint8x16_t c=ng_cls_count_neon(al,ah,p);
+        const uint8x16_t bl=vqtbl1q_u8(tlo,c),bh=vqtbl1q_u8(thi,c);
+        vst1q_u16(A+x,vaddq_u16(vld1q_u16(A+x),vreinterpretq_u16_u8(vzip1q_u8(bl,bh))));
+        vst1q_u16(A+x+8,vaddq_u16(vld1q_u16(A+x+8),vreinterpretq_u16_u8(vzip2q_u8(bl,bh))));
+        vst1q_u8(kc+x,ng_cls_count_neon(al,ah,q));
+    }
+}
 /* NEON form of the compact layout of ng_bank_prepare_avx2_impl for 4³
  * selector blocks, 16 x at a time: selector masks and bounds in bytes, the
  * base sum in 16-bit lanes. */
@@ -606,6 +643,10 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                             ng_bank_class_lookup(h->e,ri[j],class_table,pp,entropy_classes[j]);
                         entropy_class_ready=1;
                     }else
+#endif
+#if VCN_HAVE_NEON
+                    if(entropy&&h->p->K<=16&&ep->K<=16){ng_cls2_neon(h->e,ri[j],h->p,pp,ep,entropy_classes[j]);entropy_class_ready=1;}
+                    else
 #endif
                     VCN_LC_CLS(h->e,ri[j],h->p,pp,h->classes);
                     }
