@@ -1,7 +1,8 @@
-/* Shared candidate evaluation; specialized by the existing geometry builds. */
-static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,const size_t* sizes,
+/* Shared candidate evaluation; specialized by the existing geometry builds and,
+ * through ng_bank_symbols_impl, by the selector edge. */
+__attribute__((always_inline)) static inline int ng_bank_symbols_edge(unsigned count,const uint8_t* const* params,const size_t* sizes,
     const uint16_t* const* base,const uint8_t* choices,const uint8_t* src,
-    uint8_t* const* candidates,uint8_t* symbols,uint16_t* activity,int selected_only) {
+    uint8_t* const* candidates,uint8_t* symbols,uint16_t* activity,int selected_only,const unsigned edge) {
     if(count<1||count>4)return -1;
     vcn_lc_par* p[4]={0};uint8_t* e=calloc(VCN_LC_NB,1);int rc=-1;
     if(!e)return -1;
@@ -14,7 +15,6 @@ static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,cons
         size_t ri=VCN_LC_IDX(z,y,0),o=((size_t)z*VCN_LC_Y+y)*VCN_LC_D;
         vcn_lc_row_begin(e,z,y,0);vcn_lc_apre(e,ri,activity+o);
         uint8_t row_choices[VCN_LC_D];
-        const unsigned edge=ng_choice_edge;
         const size_t choice_row=((z/edge)*(VCN_LC_Y/edge)+y/edge)*(VCN_LC_D/edge);
         for(unsigned x=0;x<VCN_LC_D;x+=edge)memset(row_choices+x,choices[choice_row+x/edge],edge);
 
@@ -49,4 +49,12 @@ static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,cons
     rc=0;
 done:free(e);for(unsigned m=0;m<count;m++)free(p[m]);return rc;
 }
-
+/* Edge 4, the encoders' only choice so far, gets its own copy: the per-block
+ * memset/memcpy of the selector row become fixed 4-byte stores (~9% of medium
+ * encode). Other edges run the same code with the run-time value. */
+static int ng_bank_symbols_impl(unsigned count,const uint8_t* const* params,const size_t* sizes,
+    const uint16_t* const* base,const uint8_t* choices,const uint8_t* src,
+    uint8_t* const* candidates,uint8_t* symbols,uint16_t* activity,int selected_only) {
+    if(ng_choice_edge==4)return ng_bank_symbols_edge(count,params,sizes,base,choices,src,candidates,symbols,activity,selected_only,4);
+    return ng_bank_symbols_edge(count,params,sizes,base,choices,src,candidates,symbols,activity,selected_only,ng_choice_edge);
+}
