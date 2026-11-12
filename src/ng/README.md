@@ -16,6 +16,8 @@ Public IDs are defined in `include/vc_delta3d/codec.h`:
 | slow | Broader independent-model menu search, selected-tap fits and dense regularized sufficient statistics. |
 | slower | Same menu policy with expanded predictor neighborhood/coefficient budget. |
 
+[COMPRESSION.md](../../COMPRESSION.md) explains the presets in more detail.
+
 All emit NCF1 and use 4³ selector blocks. The decoder retains the frame's
 2/4/8/16/32 selector sizes; block size is a frame parameter, not global metadata.
 Zero blocks use the existing selector alphabet. Models and residual banks are

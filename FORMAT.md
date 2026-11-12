@@ -1,5 +1,9 @@
 # VC-Delta3D wire formats
 
+This document specifies the byte layout. How the encoder predicts and codes
+the data, and what the presets do, is explained in
+[COMPRESSION.md](COMPRESSION.md).
+
 Every encoded object starts with a four-byte magic that identifies it.
 `vc_decompress` dispatches on that magic alone; decoding never needs the
 encoder preset or any Zarr-side metadata.
@@ -51,7 +55,7 @@ The same frame describes cubic and rectangular fields.
 The format fixes what can be expressed, not how an encoder chooses it. Menus,
 model reuse, entropy-bank sharing, fit geometry, class counts and selector
 block size are encoder decisions within the bounds below; the current preset
-policies (see `src/ng/README.md`) are not part of the format.
+policies (see [COMPRESSION.md](COMPRESSION.md)) are not part of the format.
 
 ### 1.1 Compact header: controls
 

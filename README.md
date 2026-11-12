@@ -21,7 +21,8 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 - Decoding reads everything from the encoded bytes; Zarr metadata needs no
   per-chunk fields.
 
-[FORMAT.md](FORMAT.md) specifies all three formats and how they relate.
+[COMPRESSION.md](COMPRESSION.md) explains how the presets and Delta3D
+compress; [FORMAT.md](FORMAT.md) specifies all three formats and how they relate.
 
 ## C API
 
