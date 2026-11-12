@@ -3,8 +3,8 @@
  * One model is fitted on the whole chunk and the 4^3 blocks are split by the
  * size of its residuals. Each round then (1) fits every model on its own
  * blocks and (2) moves every block to the model that codes it most cheaply.
- * The models differ in their weights only; they share the neighbourhood, so
- * decoding costs the same as for one model. */
+ * The models share the neighbourhood and differ in their weights; decoding
+ * costs one more sum over the earlier rows per extra model. */
 #include "ng_fit.h"
 #include "ng_frame.h"
 #include "ng_predict.h"
@@ -18,6 +18,7 @@ enum { MAX_MODES = 4, MIN_BLOCKS = 64 };
 
 typedef struct {
     unsigned d, modes;
+    int cfg[6];
     size_t n, blocks;
     const uint8_t *src;
     vc_ng_occupancy zero;
@@ -91,12 +92,11 @@ static int initial_split(split_state *s, const uint8_t *symbols)
 
 static int fit_modes(split_state *s)
 {
-    const int cfg[6] = {3, 3, 1, 16, 40, 128};
     for (unsigned k = 0; k < s->modes; ++k) {
         /* A mode that lost nearly all its blocks keeps its previous model. */
         if (mode_mask(s, k) < MIN_BLOCKS && s->fits[k].params) continue;
         vc_ng_fit fit;
-        if (!vc_ng_fit_input(&fit, s->src, cfg, NULL, s->mask, NULL, NULL, NULL)) return 0;
+        if (!vc_ng_fit_input(&fit, s->src, s->cfg, NULL, s->mask, NULL, NULL, NULL)) return 0;
         vc_ng_fit_free(&s->fits[k]);
         s->fits[k] = fit;
     }
@@ -133,10 +133,12 @@ static int select_blocks(split_state *s)
     return 1;
 }
 
-int vc_ng_split_encode(const uint8_t *src, unsigned d, unsigned modes, unsigned rounds,
+int vc_ng_split_encode(const uint8_t *src, unsigned d, const vc_ng_tuning *tuning,
     uint8_t *out, size_t cap, size_t *written)
 {
-    if (!src || !out || !written || !ng_geometry_valid(d, d, d) || modes < 2 || modes > MAX_MODES || !rounds) return -1;
+    if (!src || !tuning || !out || !written || !ng_geometry_valid(d, d, d)) return -1;
+    const unsigned modes = tuning->models, rounds = tuning->rounds;
+    if (modes < 2 || modes > MAX_MODES || !rounds) return -1;
     const ng_geometry saved = ng_current_geometry;
     const unsigned old_edge = ng_choice_edge;
     ng_current_geometry = (ng_geometry){(int)d, (int)d, (int)d};
@@ -148,6 +150,7 @@ int vc_ng_split_encode(const uint8_t *src, unsigned d, unsigned modes, unsigned 
     int rc = -1;
     if (!s) goto done;
     s->src = src; s->d = d; s->n = (size_t)d * d * d; s->blocks = s->n / 64; s->modes = modes;
+    memcpy(s->cfg, (int[6]){3, 3, tuning->reach, 16, tuning->taps, tuning->stride}, sizeof(s->cfg));
     if (!vc_ng_scan(&s->zero, src, d)) goto done;
     /* The zero predictor takes one of the four entropy banks. */
     if (s->zero.count && s->modes > 3) s->modes = 3;
@@ -169,9 +172,8 @@ int vc_ng_split_encode(const uint8_t *src, unsigned d, unsigned modes, unsigned 
     for (unsigned z = 0; z < d; ++z) for (unsigned y = 0; y < d; ++y) for (unsigned x = 0; x < d; ++x)
         s->block[((size_t)z * d + y) * d + x] = ((z / 4) * (d / 4) + y / 4) * (d / 4) + x / 4;
     {
-        const int cfg[6] = {3, 3, 1, 16, 40, 128};
         vc_ng_fit whole;
-        if (!vc_ng_fit_input(&whole, src, cfg, NULL, s->zero.mask, NULL, NULL, NULL)) goto done;
+        if (!vc_ng_fit_input(&whole, src, s->cfg, NULL, s->zero.mask, NULL, NULL, NULL)) goto done;
         int ok = initial_split(s, whole.symbols);
         vc_ng_fit_free(&whole);
         if (!ok) goto done;

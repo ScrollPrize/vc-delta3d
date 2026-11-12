@@ -2,12 +2,21 @@
 #define VC_NG_FRAME_H
 #include <stdint.h>
 #include <stddef.h>
-/* The only public encoder policies, shared by scalar/indexed dispatch. */
-int vc_ng_fast_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
+/* Encoder settings of the single-pass policies. `reach` is the window radius
+ * two slices back (1: 3x3, 3: 7x7); `taps` is how many candidate neighbours
+ * the model keeps; the full-chunk fit samples every `stride`-th voxel of a
+ * row; `intercept` is the fit's intercept weight; `models` > 1 fits that many
+ * models, each refitted on the blocks that select it for `rounds` rounds. */
+typedef struct { int reach,taps,stride; double intercept; unsigned models,rounds; } vc_ng_tuning;
+/* The encoder policies, shared by scalar/indexed dispatch. */
+int vc_ng_fast_encode(const uint8_t*,unsigned,const vc_ng_tuning*,uint8_t*,size_t,size_t*);
+int vc_ng_split_encode(const uint8_t*,unsigned,const vc_ng_tuning*,uint8_t*,size_t,size_t*);
+/* Menu-search policies of 0.3.x: medium, and slow (0) or slower (1). */
 int vc_ng_medium_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
-/* Block modes: `modes` learned models (2..4), each refitted on its own blocks for `rounds` rounds. */
-int vc_ng_split_encode(const uint8_t*,unsigned,unsigned modes,unsigned rounds,uint8_t*,size_t,size_t*);
 int vc_ng_slow_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
+/* Any tuning (benchmarks); the presets call this with their fixed settings. */
+int vc_ng_tuned_encode(const uint8_t*,unsigned,const vc_ng_tuning*,uint8_t*,size_t,size_t*);
+/* `preset` is a public vc_preset other than delta. */
 int vc_ng_preset_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
 typedef struct { const uint8_t *data; size_t size; } vc_ng_model;
 typedef struct { unsigned predictor,model,entropy; int32_t weights[2]; } vc_ng_choice;

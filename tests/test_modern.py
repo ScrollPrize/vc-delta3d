@@ -13,7 +13,7 @@ def test_c_geometry_kernels(dimension):
     frame = codec.encode(data)
     assert codec.decode(frame) == data.tobytes()
 
-@pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
+@pytest.mark.parametrize('preset',['faster','fast','balanced','small','medium','slow','slower'])
 def test_presets(preset):
     a=np.random.default_rng(718).integers(0,256,(32,32,32),dtype=np.uint8)
     a[:16]=0
@@ -23,10 +23,20 @@ def test_presets(preset):
     for bad in (f[:19],f[:-1]):
         with pytest.raises((ValueError,RuntimeError)):c.decode(bad)
 
+def test_small_keeps_the_one_option_frame_on_sparse_data():
+    # A filled ball: fixed predictors code it far better than fitted models.
+    z,y,x=np.ogrid[:64,:64,:64]
+    a=np.where((z-30)**2+(y-34)**2+(x-28)**2<24**2,np.uint8(200),np.uint8(0))
+    a=np.ascontiguousarray(np.broadcast_to(a,(64,64,64)))
+    sizes={p:len(Delta3D(predictor=p).encode(a)) for p in ('faster','fast','small')}
+    assert sizes['small']<=sizes['fast']
+    assert sizes['small']<=1.02*sizes['faster']
+    c=Delta3D(predictor='small');np.testing.assert_array_equal(np.frombuffer(c.decode(c.encode(a)),np.uint8),a.ravel())
+
 def test_modern_thread_safety():
     a=np.random.default_rng(719).integers(0,256,(32,32,32),dtype=np.uint8)
     def run(p):return Delta3D(predictor=p).encode(a)
-    names=['fast','medium','slow','slower']*2
+    names=['faster','fast','balanced','small','medium','slow','slower']*2
     expected=list(map(run,names))
     with ThreadPoolExecutor(max_workers=4) as pool:assert list(pool.map(run,names))==expected
 

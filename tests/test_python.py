@@ -8,10 +8,15 @@ from vc_delta3d import (
     decompress_with_magic,
 )
 
-@pytest.mark.parametrize("preset", ["lpc", "tooslow"])
-def test_retired_presets_rejected(preset):
+@pytest.mark.parametrize("preset", ["lpc", "tooslow", "from-a-newer-version"])
+def test_unknown_presets_open_but_do_not_encode(preset):
+    codec = numcodecs.get_codec({"id": "vc-delta3d", "quant": 1, "predictor": preset})
+    assert codec.get_config()["predictor"] == preset
+    source = np.zeros((32, 32, 32), np.uint8)
+    np.testing.assert_array_equal(
+        np.frombuffer(codec.decode(Delta3D().encode(source)), np.uint8), source.ravel())
     with pytest.raises(ValueError):
-        Delta3D(predictor=preset)
+        codec.encode(source)
 
 
 def test_retired_lpc_frame_rejected():

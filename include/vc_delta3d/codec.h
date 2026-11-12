@@ -6,7 +6,15 @@
 extern "C" {
 #endif
 /* Stable numeric IDs. Retired LPC=2 and tooslow=7 are not accepted. */
-typedef enum { VC_DELTA=1, VC_FAST=3, VC_MEDIUM=4, VC_SLOW=5, VC_SLOWER=6 } vc_preset;
+/* Encoder presets, from fastest to smallest: delta, faster, fast, balanced,
+ * small, slower. medium and slow are the menu-search presets of 0.3.x, kept
+ * because they do well on some derived volumes. A preset only steers the
+ * encoder; every frame decodes without it. */
+typedef enum { VC_DELTA=1, VC_FAST=3, VC_MEDIUM=4, VC_SLOW=5, VC_SLOWER=6, VC_FASTER=8, VC_BALANCED=9, VC_SMALL=10 } vc_preset;
+/* Nonzero for the presets this version encodes with. */
+static inline int vc_preset_valid(unsigned preset) {
+    return preset==VC_DELTA||preset==VC_FAST||preset==VC_MEDIUM||preset==VC_SLOW||preset==VC_SLOWER||preset==VC_FASTER||preset==VC_BALANCED||preset==VC_SMALL;
+}
 typedef struct {
     uint32_t shape[3]; /* Z,Y,X in elements */
     uint32_t channels; /* 0: scalar frame; >=1: channel container */

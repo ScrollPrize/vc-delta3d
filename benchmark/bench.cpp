@@ -1,6 +1,6 @@
 // Benchmark VC-Delta3D on raw chunk files fetched by run.py.
 //
-// Usage: bench <level-dir> [reps] [delta|fast|medium|slow|slower]
+// Usage: bench <level-dir> [reps] [delta|faster|fast|balanced|small|slower|medium|slow]
 //
 // <level-dir> must contain *.raw chunk files plus a shape.txt holding
 // "z y x elem_size" for every chunk in the directory. Reports the
@@ -27,7 +27,7 @@ static double now()
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: bench <level-dir> [reps] [delta|fast|medium|slow|slower]\n");
+        std::fprintf(stderr, "usage: bench <level-dir> [reps] [delta|faster|fast|balanced|small|slower|medium|slow]\n");
         return 1;
     }
     const fs::path dir = argv[1];
@@ -38,6 +38,9 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[3], "medium")) predictor = vc_delta3d::Predictor::Medium;
         else if (!std::strcmp(argv[3], "slow")) predictor = vc_delta3d::Predictor::Slow;
         else if (!std::strcmp(argv[3], "slower")) predictor = vc_delta3d::Predictor::Slower;
+        else if (!std::strcmp(argv[3], "faster")) predictor = vc_delta3d::Predictor::Faster;
+        else if (!std::strcmp(argv[3], "balanced")) predictor = vc_delta3d::Predictor::Balanced;
+        else if (!std::strcmp(argv[3], "small")) predictor = vc_delta3d::Predictor::Small;
         else if (std::strcmp(argv[3], "delta")) return 1;
     }
 

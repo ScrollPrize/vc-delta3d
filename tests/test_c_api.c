@@ -87,8 +87,9 @@ int main(void) {
     assert(large.leaf_count==2&&large.leaves[1].offset==en+long_leaf);vc_index_free(&large);
     ext[en-1]=5;assert(!vc_index_read(ext,en,en+long_leaf+4,&large));
     memset(src,0,n);
-    for(unsigned p=VC_FAST;p<=VC_SLOWER;++p){
+    for(unsigned p=VC_FAST;p<=VC_SMALL;++p){
         opt.preset=(vc_preset)p;
+        if(!vc_preset_valid(p)){assert(!vc_compress(src,n,&opt,&frame,&bytes));continue;}
         assert(vc_compress(src,n,&opt,&frame,&bytes));
         assert(vc_decompress(frame,bytes,decoded,n)&&!memcmp(src,decoded,n));
         assert(!vc_decompress(frame,bytes,decoded,n+1));

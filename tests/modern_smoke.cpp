@@ -7,8 +7,9 @@ int main() {
     using namespace vc_delta3d;
     std::vector<std::byte> a(32*32*32);
     for(size_t i=0;i<a.size();++i)a[i]=std::byte((i*17+i/32)%256);
-    for(auto p:{Predictor::Delta,Predictor::Fast,Predictor::Medium,
-                Predictor::Slow,Predictor::Slower}){
+    for(auto p:{Predictor::Delta,Predictor::Faster,Predictor::Fast,Predictor::Balanced,
+                Predictor::Small,Predictor::Medium,Predictor::Slow,
+                Predictor::Slower}){
         auto f=compress(a,{32,32,32},1,1,p);
         auto d=decompress(f,a.size());assert(d&&*d==a);
         ng_set_isa_limit(256);d=decompress(f,a.size());assert(d&&*d==a);ng_set_isa_limit(0);

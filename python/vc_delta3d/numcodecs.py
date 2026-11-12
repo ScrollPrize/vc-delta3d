@@ -15,7 +15,15 @@ class Delta3D(numcodecs.abc.Codec):
     own; leave it unset for 3D chunks. Signed values are
     coded as their bytes and must stay lossless (``quant=1``).
 
-    Presets default to ``fast``. For 16-bit data, quantization, or spatial
+    ``predictor`` names the encoder preset, from fastest to smallest: ``delta``,
+    ``faster``, ``fast`` (default), ``balanced``, ``small``, ``slower``; also
+    ``medium`` and ``slow``, the menu-search presets of 0.3.x. It only affects
+    encoding. Frames describe themselves, so an array written with any preset
+    decodes with any setting, and a name this version does not encode (for
+    example one from a newer version) never prevents opening an array; it
+    raises on encode.
+
+    For 16-bit data, quantization, or spatial
     dimensions not divisible by 32, they automatically use legacy Delta3D
     encoding and its complete D3D1 framing (including multi-channel containers).
     Supported inputs use the preset's native framing. Decoding detects either.
@@ -23,6 +31,7 @@ class Delta3D(numcodecs.abc.Codec):
     """
 
     codec_id = "vc-delta3d"
+    _PRESETS = ("delta", "faster", "fast", "balanced", "small", "slower", "medium", "slow")
     _UNSIGNED = {1: np.uint8, 2: np.uint16}
 
     def __init__(
@@ -36,13 +45,19 @@ class Delta3D(numcodecs.abc.Codec):
             raise ValueError("vc-delta3d only supports rANS entropy coding")
         if not 1 <= int(quant) <= 255:
             raise ValueError("quant must be in [1, 255]")
-        if predictor not in ("delta", "fast", "medium", "slow", "slower"):
-            raise ValueError("unknown predictor/preset")
+        if not isinstance(predictor, str):
+            raise ValueError("predictor must be a preset name")
         if channel_axis not in (None, "first", "last"):
             raise ValueError('channel_axis must be None, "first" or "last"')
         self.quant = int(quant)
         self.predictor = predictor
         self.channel_axis = channel_axis
+
+    def _encoder(self) -> str:
+        """The preset to encode with; the stored name stays as written."""
+        if self.predictor in self._PRESETS:
+            return self.predictor
+        raise ValueError(f"this version cannot encode with preset {self.predictor!r}")
 
     def encode(self, buf):
         array = np.asarray(buf)
@@ -54,14 +69,14 @@ class Delta3D(numcodecs.abc.Codec):
         if self.channel_axis is None:
             if array.ndim != 3:
                 raise ValueError("vc-delta3d expects 3D chunks (set channel_axis for 4D chunks)")
-            return _codec.compress_array(array, self.quant, self.predictor)
+            return _codec.compress_array(array, self.quant, self._encoder())
         if array.ndim != 4:
             raise ValueError("channel_axis needs 4D chunks")
         last = self.channel_axis == "last"
         channels = array.shape[-1] if last else array.shape[0]
         z, y, x = array.shape[:3] if last else array.shape[1:]
         return _codec.compress_channels(
-            array.tobytes(), z, y, x, channels, last, array.itemsize, self.quant, self.predictor
+            array.tobytes(), z, y, x, channels, last, array.itemsize, self.quant, self._encoder()
         )
 
     def decode(self, buf, out=None):
