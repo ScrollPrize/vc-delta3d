@@ -25,11 +25,12 @@ Hendrick's NG context modelling with Delta3D's directional predictors.
 
 ### Predictors
 
-Every voxel `v` is predicted from causal neighbours: `a` (x − 1), `b` (y − 1),
-`c` (z − 1) and the diagonal neighbours between them. There are three kinds of
-predictor.
+Every voxel `v` is predicted from causal voxels, that is, voxels the decoder
+has already reconstructed. There are three kinds of predictor.
 
-**Fixed predictors (IDs 0–11).** Simple closed-form predictions:
+**Fixed predictors (IDs 0–11).** Closed-form predictions from the seven
+nearest causal neighbours: `a` (x − 1), `b` (y − 1), `c` (z − 1) and the
+diagonals between them (`ab`, `ac`, `bc`, `abc`):
 
 | ID | Prediction | ID | Prediction |
 |---|---|---|---|
@@ -43,13 +44,18 @@ predictor.
 The clamped forms (8–11) behave like the median edge detector of LOCO-I: they
 avoid overshooting at edges.
 
-**Learned linear predictors (models).** The encoder fits a linear predictor
-by least squares over a causal 3-D neighbourhood (up to two previous slices),
-picks the most useful taps greedily, and rounds the weights to multiples of
-1/256. One fixed predictor's output is an extra input with its own learned
-weight, so a model refines a fixed predictor rather than replacing it. The
-first slice, which has no previous slice, gets its own weight set. The weights
-travel in the frame header.
+**Learned linear predictors (models).** A weighted sum over a much larger
+causal neighbourhood: up to 3 voxels back in the current row, 7 voxels in each
+of the three rows above, a 7×7 window in the previous slice, and a 3×3 window
+two slices back (82 candidate voxels; `slower` uses 7×7 there too, 122
+candidates). The encoder fits one set of weights per chunk by least squares,
+keeps the 40 most useful taps (`slower`: all), and rounds the weights to
+multiples of 1/256. The neighbourhood is independent of the 4³ blocks
+described below and reads across their boundaries. One fixed predictor's
+output is an extra input with its own learned weight, so a model refines a
+fixed predictor rather than replacing it. The first slice, which has no
+previous slice, gets its own weight set. The weights travel in the frame
+header.
 
 **Zero predictor (ID 12).** For blocks that are entirely zero (for example
 masked regions); they cost almost nothing.
