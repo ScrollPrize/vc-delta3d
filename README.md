@@ -117,3 +117,19 @@ removed presets are reference measurements, not supported options.
 See [benchmark/README.md](benchmark/README.md) for the benchmark harness.
 The C-port validation record (`C_PORT_RESULTS.md`) and its one-off scripts
 are in git history (commit 93469eb).
+
+## Releasing
+
+Publishing a GitHub release uploads wheels (Linux x86_64/aarch64, macOS arm64,
+Windows AMD64) and the sdist to [PyPI](https://pypi.org/p/vc-delta3d) via
+`.github/workflows/release.yml` (trusted publishing, `pypi` environment).
+
+1. Set the version in **both** `pyproject.toml` (`version`) and
+   `CMakeLists.txt` (`project(... VERSION ...)`), merge to `main`, and check
+   that the wheel builds on `main` are green.
+2. Create the release from `main` with tag `vX.Y.Z` matching that version,
+   e.g. `gh release create v0.3.0 --target main --title v0.3.0 --notes-file notes.md`
+   (or *Draft a new release* on GitHub). Note format and decoding
+   compatibility changes in the release notes.
+3. The *Publish to PyPI* job runs once the build jobs pass; check the Actions run
+   and https://pypi.org/p/vc-delta3d.
