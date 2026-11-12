@@ -11,18 +11,17 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 
 ## Performance
 
-Scroll CT, 77 masked level-0 128³ chunks, one core, 0.3.0
+Scroll CT, 77 masked level-0 128³ chunks, one core
 (full tables for 10 EC2 instance types in [BENCHMARKS.md](BENCHMARKS.md)):
 
 |Preset|Size (% raw)|Encode MiB/s (c7i / c8g)|Decode MiB/s (c7i / c8g)|
 |---|---:|---:|---:|
-|delta|36.3|215 / 268|452 / 696|
-|fast|26.8|62.5 / 47.6|281 / 54.1|
-|medium|26.8|14.5 / 12.8|216 / 53.0|
-|slower¹|26.5|1.7 / 0.8|183 / 43.7|
+|delta|36.3|215 / 269|452 / 701|
+|fast|26.8|62.5 / 48.7|281 / 118|
+|medium|26.8|14.5 / 13.0|216 / 101|
+|slower¹|26.5|1.7 / 0.8|183 / 71.8|
 
-c7i: Intel Sapphire Rapids; c8g: Graviton4. NG decoding on ARM has no vector
-path yet in 0.3.0. ¹On a 16-chunk subset. [COMPRESSION.md](COMPRESSION.md)
+c7i: Intel Sapphire Rapids; c8g: Graviton4. ¹On a 16-chunk subset. [COMPRESSION.md](COMPRESSION.md)
 explains what the presets do.
 
 ## Formats and compatibility

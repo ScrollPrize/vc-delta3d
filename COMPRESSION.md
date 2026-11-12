@@ -106,8 +106,8 @@ up to about 5%, at about 4× (`medium`) to 40–60× (`slower`) the encode time 
 (see [BENCHMARKS.md](BENCHMARKS.md)). Decoding does the
 same kind of work for every preset, but menus with more entries and models
 with more taps cost more per voxel. On x86, `medium` takes about 15–30% longer
-to decode than `fast`, `slow` 25–50% and `slower` 40–60%; on ARM the gaps are
-smaller. See [BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
+to decode than `fast`, `slow` 25–50% and `slower` 40–60%; on ARM about 15%,
+25–35% and 60–65%. See [BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
 
 The encoder's choices are not part of the format: a future encoder can pick
 other menus, models, class counts or block sizes (2–32) without changing the
