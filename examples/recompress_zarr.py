@@ -1,7 +1,9 @@
 """Recompress one or more resolution levels of a public Zarr pyramid.
 
 The source store is read anonymously from S3. The output may be a local path
-or a writable fsspec URL such as ``s3://my-bucket/output.zarr``.
+or a writable fsspec URL such as ``s3://my-bucket/output.zarr``. The output is
+Zarr v2 by default; ``--zarr-format 3`` writes v3, optionally sharded with
+``--shards``, using the ``[bytes, vc-delta3d]`` codec chain.
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 import zarr
+from zarr.codecs import BytesCodec
+
 from vc_delta3d import Delta3D
+from vc_delta3d.zarr3 import Delta3DCodec
 
 SOURCE_URL = (
     "s3://vesuvius-challenge-open-data/PHercParis4/volumes/"
@@ -47,16 +52,26 @@ def copy_blocks(
     *,
     workers: int,
 ) -> float:
-    """Read and recompress an array one chunk at a time with bounded memory."""
+    """Read and recompress an array one stored object at a time with bounded memory.
 
-    indices = iter(block_indices(source.cdata_shape))
-    total = math.prod(source.cdata_shape)
+    Each task writes one whole target chunk, or one whole shard when the target
+    is sharded, so no two tasks modify the same object.
+    """
+
+    block = target.shards or target.chunks
+    grid = tuple(math.ceil(size / edge) for size, edge in zip(target.shape, block))
+    indices = iter(block_indices(grid))
+    total = math.prod(grid)
     max_pending = max(workers * 2, 1)
     started = time.monotonic()
     completed = 0
 
     def copy_one(index: tuple[int, ...]) -> None:
-        target.blocks[index] = source.blocks[index]
+        region = tuple(
+            slice(i * edge, min((i + 1) * edge, size))
+            for i, edge, size in zip(index, block, target.shape)
+        )
+        target[region] = source[region]
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         pending: dict[Future[None], tuple[int, ...]] = {}
@@ -78,8 +93,8 @@ def copy_blocks(
                     elapsed = time.monotonic() - started
                     rate = completed / elapsed if elapsed else 0.0
                     print(
-                        f"  {completed:,}/{total:,} chunks "
-                        f"({completed / total:.1%}, {rate:.1f} chunks/s)",
+                        f"  {completed:,}/{total:,} blocks "
+                        f"({completed / total:.1%}, {rate:.1f} blocks/s)",
                         flush=True,
                     )
 
@@ -168,6 +183,8 @@ def recompress_level(
     quant: int,
     workers: int,
     benchmark_chunks: int,
+    zarr_format: int,
+    shards: tuple[int, ...] | None,
 ) -> LevelReport:
     """Create and populate one output pyramid level."""
 
@@ -185,14 +202,22 @@ def recompress_level(
         f"dtype={source.dtype}",
         flush=True,
     )
+    if zarr_format == 2:
+        codecs = {"compressor": Delta3D(quant=quant), "order": source.order}
+    else:
+        # Inner chunks keep the source chunk shape; each one is one frame.
+        codecs = {
+            "serializer": BytesCodec(endian="little"),
+            "compressors": Delta3DCodec(quant=quant),
+            "shards": shards,
+        }
     target = target_group.create_array(
         level,
         shape=source.shape,
         chunks=source.chunks,
         dtype=source.dtype,
-        compressor=Delta3D(quant=quant),
         fill_value=source.fill_value,
-        order=source.order,
+        **codecs,
     )
     target.attrs.update(dict(source.attrs))
     copy_seconds = copy_blocks(source, target, workers=workers)
@@ -297,6 +322,21 @@ def parse_args() -> argparse.Namespace:
         help="Chunks per level used for codec speed measurements (default: 128)",
     )
     parser.add_argument(
+        "--zarr-format",
+        type=int,
+        choices=(2, 3),
+        default=2,
+        help="Zarr format of the output (default: 2)",
+    )
+    parser.add_argument(
+        "--shards",
+        type=int,
+        nargs=3,
+        metavar=("Z", "Y", "X"),
+        help="Shard shape in voxels for --zarr-format 3, a multiple of the "
+        "source chunk shape (default: unsharded)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Replace an existing output store instead of failing",
@@ -312,6 +352,9 @@ def main() -> None:
         raise SystemExit("--workers must be at least 1")
     if args.benchmark_chunks < 0:
         raise SystemExit("--benchmark-chunks must be nonnegative")
+    if args.shards is not None and args.zarr_format != 3:
+        raise SystemExit("--shards needs --zarr-format 3")
+    shards = tuple(args.shards) if args.shards is not None else None
 
     # This public AWS store requires unsigned requests. Zarr passes anon=True
     # through to s3fs via its fsspec store implementation.
@@ -333,7 +376,7 @@ def main() -> None:
     target_group = zarr.open_group(
         args.output,
         mode="w" if args.overwrite else "w-",
-        zarr_format=2,
+        zarr_format=args.zarr_format,
     )
     target_group.attrs.update(
         selected_group_attributes(dict(source_group.attrs), levels)
@@ -342,7 +385,9 @@ def main() -> None:
     print(f"source: {SOURCE_URL}")
     print(f"output: {args.output}")
     print(f"levels: {', '.join(levels)}")
-    print(f"codec: Delta3D(quant={args.quant})")
+    print(f"codec: Delta3D(quant={args.quant}), zarr v{args.zarr_format}")
+    if shards is not None:
+        print(f"shards: {shards}")
     reports = []
     for level in levels:
         reports.append(
@@ -353,6 +398,8 @@ def main() -> None:
                 quant=args.quant,
                 workers=args.workers,
                 benchmark_chunks=args.benchmark_chunks,
+                zarr_format=args.zarr_format,
+                shards=shards,
             )
         )
 
