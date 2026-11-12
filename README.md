@@ -17,15 +17,18 @@ Scroll CT, 95 masked level-0 128³ chunks from five scrolls, one core
 
 |Preset|Size (% raw)|Encode MiB/s (c7i / c8g)|Decode MiB/s (c7i / c8g)|
 |---|---:|---:|---:|
-|delta|37.0|216 / 258|477 / 686|
-|faster|27.0|65.6 / 47.0|307 / 118|
-|fast|26.8|64.3 / 43.9|292 / 110|
-|balanced|26.7|48.1 / 27.3|280 / 103|
-|small|26.6|15.2 / 11.1|207 / 75.6|
-|slower|26.7|2.1 / 0.9|240 / 78.6|
+|delta|37.0|240 / 279|512 / 703|
+|faster|27.0|64.7 / 46.7|306 / 117|
+|fast|26.8|64.0 / 43.6|291 / 109|
+|balanced|26.7|47.6 / 27.2|279 / 102|
+|small|26.6|11.8 / 8.17|217 / 79.8|
+|slower|26.7|1.86 / 0.86|237 / 75.7|
+|medium|27.0|16.2 / 13.0|262 / 104|
+|slow|26.9|2.57 / 1.36|250 / 93.4|
 
 c7i: Intel Sapphire Rapids; c8g: Graviton4. `faster` is the `fast` preset of
-0.3.x. Provisional numbers: the `small` encode speed is about 25% too high. How much the smaller presets gain depends on the data; see
+0.3.x; `medium` and `slow` are kept from 0.3.x for some derived volumes. How
+much the smaller presets gain depends on the data; see
 [BENCHMARKS.md](BENCHMARKS.md). [COMPRESSION.md](COMPRESSION.md) explains what
 the presets do.
 

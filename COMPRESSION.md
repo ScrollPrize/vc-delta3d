@@ -109,13 +109,13 @@ it is smaller, which is the case for data that a fixed predictor codes best.
 How much the smaller presets gain depends on the data. On level-0 scroll CT,
 `fast` is 0.2 to 1.4% smaller than `faster`, `balanced` 0.3 to 2.3% and `small`
 0.5 to 4.8%; on downsampled levels the gains are a few tenths of a percent.
-`balanced` takes about 1.3 to 1.7 times and `small` about 4 times the encode
-time of `fast`; `slower` takes 30 to 55 times.
+`balanced` takes about 1.3 to 1.8 times and `small` 5 to 6 times the encode
+time of `faster`; `slower` takes 30 to 60 times.
 
 Decoding does the same kind of work for every preset. Each kept weight costs
 about 0.3% of decode time on x86 and 0.45% on ARM, and each extra model one
-more sum over the earlier rows. Against `faster`, `fast` decodes about 5 to 8%
-slower, `balanced` 7 to 16% and `small` 20 to 55%, depending on the CPU. See
+more sum over the earlier rows. Against `faster`, `fast` takes 4 to 10% longer
+to decode, `balanced` 8 to 19% and `small` 20 to 51%, depending on the CPU. See
 [BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
 
 `medium` and `slow` are kept from 0.3.x. On scroll CT they are not worth their
