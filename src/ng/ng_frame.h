@@ -5,6 +5,8 @@
 /* The only public encoder policies, shared by scalar/indexed dispatch. */
 int vc_ng_fast_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
 int vc_ng_medium_encode(const uint8_t*,unsigned,uint8_t*,size_t,size_t*);
+/* Block modes: `modes` learned models (2..4), each refitted on its own blocks for `rounds` rounds. */
+int vc_ng_split_encode(const uint8_t*,unsigned,unsigned modes,unsigned rounds,uint8_t*,size_t,size_t*);
 int vc_ng_slow_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
 int vc_ng_preset_encode(const uint8_t*,unsigned,unsigned,uint8_t*,size_t,size_t*);
 typedef struct { const uint8_t *data; size_t size; } vc_ng_model;
