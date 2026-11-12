@@ -34,7 +34,7 @@ classifiers = [
 
 [project.optional-dependencies]
 zarr = [
-    "zarr>=3.2,<4",
+    "zarr>=3.1.1,<4",
 ]
 examples = [
     "s3fs>=2024.12.0",
@@ -64,7 +64,9 @@ VC_DELTA3D_INSTALL_CPP = "OFF"
 [tool.cibuildwheel]
 build = "cp{312,313,314}-*"
 skip = "*-musllinux_*"
-test-requires = ["pytest", "zarr>=3.2,<4"]
+# No < or > here: on Windows cibuildwheel runs this through cmd.exe, which
+# reads them as redirections. ~=3.1 means >=3.1,<4.
+test-requires = ["pytest", "zarr~=3.1"]
 test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py {project}/tests/test_fallback.py {project}/tests/test_zarr3.py"
 audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
