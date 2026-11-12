@@ -200,8 +200,9 @@ static void ng_cls2_neon(const uint8_t*e,size_t ri,const vcn_lc_par*p,uint16_t*r
  * selector blocks, 16 x at a time: selector masks and bounds in bytes, the
  * base sum in 16-bit lanes. */
 static void ng_bank_prepare_neon4(const uint8_t*row,const uint8_t*raw,const uint8_t*choices,const uint16_t*pre,int y,int z,uint16_t*const fields[4],int fast){
-    static const uint8_t expand[16]={0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3},first[16]={6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7};
-    const uint8x16_t masks=vld1q_u8((const uint8_t[16]){0,1,2,3,4,5,6,7,3,5,6,7,0,0,0,0}),ex=vld1q_u8(expand);
+    static const uint8_t expand[16]={0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3},first[16]={6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7},
+                         direction[16]={0,1,2,3,4,5,6,7,3,5,6,7,0,0,0,0};
+    const uint8x16_t masks=vld1q_u8(direction),ex=vld1q_u8(expand);
     const uint8x16_t avail=vdupq_n_u8((uint8_t)(1|(y?2:0)|(z?4:0))),ff=vdupq_n_u8(255);
     const uint8x16_t fastbit=vdupq_n_u8(fast?8:0);
     const ptrdiff_t rp=VCN_LC_RP,sp=VCN_LC_SP;
