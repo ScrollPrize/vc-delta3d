@@ -11,7 +11,7 @@
  * metadata and no cross-call mutable shared state. */
 typedef struct { int x,y,z; } ng_geometry;
 extern _Thread_local ng_geometry ng_current_geometry;
-extern _Thread_local int ng_disable_avx512;
+extern _Thread_local int ng_disable_avx512, ng_disable_avx2;
 extern _Thread_local double ng_fit_intercept_weight;
 int ng_geometry_valid(uint32_t x,uint32_t y,uint32_t z);
 #ifdef NG_FIXED_GEOMETRY
@@ -25,7 +25,8 @@ int ng_geometry_valid(uint32_t x,uint32_t y,uint32_t z);
 #endif
 #define NG_N ((size_t)NG_X*NG_Y*NG_Z)
 /* Independent ISA ceiling preserves all
- * fixed-size specializations and AVX2 kernels. Scoped per calling thread. */
+ * fixed-size specializations and AVX2 kernels. Scoped per calling thread.
+ * ng_disable_avx2 selects the plain C kernels, as on x86 without AVX2. */
 static inline int ng_use_avx512(void) {
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
     return !ng_disable_avx512 && __builtin_cpu_supports("avx512f");

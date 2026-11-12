@@ -5,7 +5,47 @@
 #include <string.h>
 #include <stdio.h>
 static size_t varint(uint8_t*p,uint64_t v){size_t n=0;do{p[n++]=(uint8_t)((v&127)|(v>127?128:0));v>>=7;}while(v);return n;}
+int ng_set_isa_limit(int);
+
+/* Every preset must write the same bytes with the vector kernels and with the
+ * plain C kernels, and each must decode the other's frames. */
+static void kernels_agree(void) {
+    enum { D=64 };
+    const size_t n=(size_t)D*D*D;
+    uint8_t *src=malloc(n),*decoded=malloc(n);
+    uint32_t state=12345;
+    for(unsigned z=0;z<D;++z)for(unsigned y=0;y<D;++y)for(unsigned x=0;x<D;++x){
+        state=state*1664525u+1013904223u;
+        /* A smooth ramp with noise, a constant slab and an empty corner. */
+        unsigned v=2*x+y+3*z/2+(state>>29);
+        if(z<8)v=200;
+        if(x>=40&&y>=40)v=0;
+        src[((size_t)z*D+y)*D+x]=(uint8_t)v;
+    }
+    vc_encode_options opt=vc_default_options();
+    opt.shape[0]=opt.shape[1]=opt.shape[2]=D;
+    const vc_preset presets[]={VC_FASTER,VC_FAST,VC_BALANCED,VC_SMALL,VC_SLOWER,VC_MEDIUM,VC_SLOW};
+    for(unsigned p=0;p<sizeof(presets)/sizeof(*presets);++p){
+        uint8_t *frame[2];size_t bytes[2];
+        opt.preset=presets[p];
+        for(unsigned k=0;k<2;++k){
+            assert(!ng_set_isa_limit(k?128:0));
+            assert(vc_compress(src,n,&opt,&frame[k],&bytes[k]));
+        }
+        assert(bytes[0]==bytes[1]&&!memcmp(frame[0],frame[1],bytes[0]));
+        for(unsigned k=0;k<3;++k){
+            assert(!ng_set_isa_limit(k==0?0:k==1?256:128));
+            memset(decoded,0x5A,n);
+            assert(vc_decompress(frame[0],bytes[0],decoded,n)&&!memcmp(src,decoded,n));
+        }
+        vc_free(frame[0]);vc_free(frame[1]);
+    }
+    assert(!ng_set_isa_limit(0));
+    free(src);free(decoded);
+}
+
 int main(void) {
+    kernels_agree();
     size_t n=32u*32*32;
     uint8_t *src=malloc(4*n),*decoded=malloc(4*n); assert(src&&decoded);
     /* Empty and nonempty block regions force nonuniform selectors as well as
