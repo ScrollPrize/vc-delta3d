@@ -10,7 +10,7 @@ From a repository checkout, use `python -m pip install -e '.[examples]'`
 instead.
 
 The example reads the public PHercParis4 multiscale group with anonymous S3
-access and writes a new Zarr v2 group whose arrays use `Delta3D` compression.
+access and writes a new Zarr group (v2 by default) whose arrays use `Delta3D` compression.
 The output may be a local directory or an S3 URL for which your normal AWS
 credential chain has write permission.
 
@@ -35,6 +35,11 @@ voxels. Copying every level is a substantial data-transfer and compute job;
 the `--levels 5` run is about 2.5 GB before compression and is a useful check
 of permissions, throughput, and the resulting codec metadata. The command
 refuses to replace an existing output unless `--overwrite` is supplied.
+
+Add `--zarr-format 3` to write Zarr v3, and `--shards Z Y X` (a multiple of
+the source chunk shape, for example `--shards 1024 1024 1024`) to shard it. The
+source chunks become the inner chunks. A sharded copy writes one whole shard
+per task, so each worker holds one shard in memory.
 
 By default the copy is lossless (`--quant 1`) and uses eight concurrent chunk
 transfers. `--quant 3` enables bounded-error quantization with a maximum error

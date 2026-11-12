@@ -85,7 +85,38 @@ legacy = Delta3D(predictor="delta")
 multichannel = Delta3D(channel_axis="last")
 ```
 
-Importing the Python package registers `vc-delta3d` with numcodecs.
+Importing the Python package registers `vc-delta3d` with numcodecs, for Zarr v2
+arrays (as `compressor`).
+
+## Zarr v3 and sharding
+
+Install with `pip install 'vc-delta3d[zarr]'`. In Zarr v3, `vc-delta3d` is a
+bytes-to-bytes codec after `bytes`, normally inside `sharding_indexed`:
+
+```python
+import zarr
+from zarr.codecs import BytesCodec
+from vc_delta3d.zarr3 import Delta3DCodec
+
+array = zarr.create_array(
+    "volume.zarr", shape=(4096, 4096, 4096), dtype="uint8",
+    shards=(1024, 1024, 1024), chunks=(128, 128, 128),
+    serializer=BytesCodec(endian="little"),
+    compressors=Delta3DCodec(predictor="fast"),
+)
+```
+
+This writes the codec chain `[bytes, vc-delta3d]` that the neuroglancer and
+VC3D readers expect. zarr-python finds the codec through a `zarr.codecs` entry
+point, so reading needs no import. The configuration (`predictor`, `quant`,
+`channel_axis`) only affects encoding. 16-bit payloads hold little-endian
+elements, so keep `endian="little"`.
+
+Pick inner chunks that are cubic, divisible by 32 and at most 256 on a side
+(e.g. 64³ or 128³). Each inner chunk is then one NCF1 frame, and the shard index
+lets a reader fetch just the inner chunks it needs. Larger inner chunks are
+coded as NGI1, which zarr reads only as a whole. Chunk shapes not divisible by 32
+fall back to D3D1, and creating such an array warns.
 
 ## Build and test
 
