@@ -1,7 +1,8 @@
 # VC-Delta3D
 
-A native C volume codec with four presets: **fast** (default), **medium**,
-**slow**, and **slower**. It combines Chase Hendrick's NG prediction with
+A native C volume codec with six presets, from fastest to smallest: **delta**,
+**faster**, **fast** (default), **balanced**, **small** and **slower**; the
+**medium** and **slow** presets of 0.3.x are kept as well. It combines Chase Hendrick's NG prediction with
 Sean Johnson's Delta3D directional predictors. Both MIT notices are retained;
 see [AUTHORS.md](AUTHORS.md).
 
@@ -11,18 +12,25 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 
 ## Performance
 
-Scroll CT, 77 masked level-0 128³ chunks, one core
+Scroll CT, 95 masked level-0 128³ chunks from five scrolls, one core
 (full tables for 10 EC2 instance types in [BENCHMARKS.md](BENCHMARKS.md)):
 
 |Preset|Size (% raw)|Encode MiB/s (c7i / c8g)|Decode MiB/s (c7i / c8g)|
 |---|---:|---:|---:|
-|delta|36.3|215 / 269|452 / 701|
-|fast|26.8|62.5 / 48.7|281 / 118|
-|medium|26.8|14.5 / 13.0|216 / 101|
-|slower¹|26.5|1.7 / 0.8|183 / 71.8|
+|delta|37.0|240 / 279|512 / 703|
+|faster|27.0|64.7 / 46.7|306 / 117|
+|fast|26.8|64.0 / 43.6|291 / 109|
+|balanced|26.7|47.6 / 27.2|279 / 102|
+|small|26.6|11.8 / 8.17|217 / 79.8|
+|slower|26.7|1.86 / 0.86|237 / 75.7|
+|medium|27.0|16.2 / 13.0|262 / 104|
+|slow|26.9|2.57 / 1.36|250 / 93.4|
 
-c7i: Intel Sapphire Rapids; c8g: Graviton4. ¹On a 16-chunk subset. [COMPRESSION.md](COMPRESSION.md)
-explains what the presets do.
+c7i: Intel Sapphire Rapids; c8g: Graviton4. `faster` is the `fast` preset of
+0.3.x; `medium` and `slow` are kept from 0.3.x for some derived volumes. How
+much the smaller presets gain depends on the data; see
+[BENCHMARKS.md](BENCHMARKS.md). [COMPRESSION.md](COMPRESSION.md) explains what
+the presets do.
 
 ## Formats and compatibility
 
@@ -86,7 +94,10 @@ multichannel = Delta3D(channel_axis="last")
 ```
 
 Importing the Python package registers `vc-delta3d` with numcodecs, for Zarr v2
-arrays (as `compressor`).
+arrays (as `compressor`). `predictor` names the encoder preset (`delta`,
+`faster`, `fast`, `balanced`, `small`, `slower`, and `medium` and `slow` from
+0.3.x). It only affects encoding: arrays written with any preset open and
+decode with any setting.
 
 ## Zarr v3 and sharding
 

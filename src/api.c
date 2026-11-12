@@ -26,7 +26,7 @@ int vc_compress(const void *data,size_t size,const vc_encode_options *opt,uint8_
     *out=NULL; *out_size=0;
     if(!data || !opt || (opt->element_size!=1 && opt->element_size!=2) ||
        opt->layout>1 || !opt->quantization || opt->quantization>255 || opt->channels>INT32_MAX ||
-       (opt->preset!=VC_DELTA && (opt->preset<VC_FAST || opt->preset>VC_SLOWER))) return 0;
+       !vc_preset_valid(opt->preset)) return 0;
     size_t expected=opt->element_size; int aligned=1;
     for(unsigned a=0;a<3;++a) {
         uint32_t d=opt->shape[a]; if(!d || expected>SIZE_MAX/d) return 0;
@@ -42,7 +42,7 @@ int vc_compress(const void *data,size_t size,const vc_encode_options *opt,uint8_
         return vc_indexed_encode(src,size,opt->shape,count,opt->layout,opt->preset,NULL,0,out,out_size);
     if(size>(SIZE_MAX-131072)/4) return 0;
     size_t cap=size*4+131072,bytes=0; uint8_t *result=malloc(cap); if(!result) return 0;
-    if(vc_ng_preset_encode(src,opt->shape[2],opt->preset-3,result,cap,&bytes) || bytes>cap) { free(result); return 0; }
+    if(vc_ng_preset_encode(src,opt->shape[2],opt->preset,result,cap,&bytes) || bytes>cap) { free(result); return 0; }
     *out=result; *out_size=bytes; return 1;
 #else
     return 0;

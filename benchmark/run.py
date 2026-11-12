@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
                     help="minimum nonzero-voxel fraction per chunk "
                          "(default 0.05)")
     ap.add_argument("--preset", default="fast",
-                    choices=["delta", "fast", "medium", "slow", "slower"],
+                    choices=["delta", "faster", "fast", "balanced", "small", "slower", "medium", "slow"],
                     help="encoder preset (default fast)")
     ap.add_argument("--seed", type=int, default=1234,
                     help="sampling seed, keep fixed for a stable cache")

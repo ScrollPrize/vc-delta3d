@@ -50,9 +50,9 @@ static double metadata_cost(const vc_ng_fit *fit)
     return vc_ng_model_cost(&m,fit?1:0,&c,1);
 }
 
-int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, size_t *written)
+int vc_ng_fast_encode(const uint8_t *src, unsigned d, const vc_ng_tuning *tuning, uint8_t *out, size_t cap, size_t *written)
 {
-    if (!src || !out || !written || !ng_geometry_valid(d,d,d)) return -1;
+    if (!src || !tuning || !out || !written || !ng_geometry_valid(d,d,d)) return -1;
     const ng_geometry saved_geometry = ng_current_geometry;
     const unsigned saved_edge = ng_choice_edge;
     const size_t full_n = (size_t)d * d * d;
@@ -104,7 +104,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
     }
     /* Stable ascending predictor ID resolves equal histogram costs. */
     vc_ng_top_two(screening,top);
-    int cfg[6] = {3,3,1,16,40,d>32?4:128};
+    int cfg[6] = {3,3,tuning->reach,16,tuning->taps,d>32?4:128};
     session = ng_fit_session_create();
     if (!session) goto done;
     for (unsigned k = 0; k < 2; ++k)
@@ -143,7 +143,7 @@ int vc_ng_fast_encode(const uint8_t *src, unsigned d, uint8_t *out, size_t cap, 
         }
         vc_ng_fixed_candidates(src,candidate,d,fixed_mask);
         if (learned) {
-            cfg[5] = 128;
+            cfg[5] = tuning->stride;
             if (!vc_ng_fit_input(&final_fit,src,cfg,candidate[predictor],full.mask,NULL,
                                 full.count?NULL:activity,full.count?NULL:histogram)) goto done;
             activity_ready = !full.count;

@@ -10,6 +10,10 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
 #ifdef NG_RFUSED
 ,const uint8_t*up,const uint8_t*back,const uint8_t*upback,int neighbor_stride
 #endif
+#ifdef NG_RBLOCKW
+/* block_w[k*blocks+b][row]: in-row weight k (k<3) or the feature weight (k=3) of selector block b */
+,const uint16_t (*block_w)[32]
+#endif
 ){
     const unsigned selector_edge=ng_choice_edge;
 #ifdef NG_RPACKED
@@ -21,10 +25,14 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
         NG_RV p0=NG_RLOAD((const NG_RV*)(prev[0]+NG_RSTEP*h));
         NG_RV p1=NG_RLOAD((const NG_RV*)(prev[1]+NG_RSTEP*h));
         NG_RV p2=NG_RLOAD((const NG_RV*)(prev[2]+NG_RSTEP*h));
+#ifdef NG_RBLOCKW
+        NG_RV w0,w1,w2,f;
+#else
         NG_RV w0=NG_RLOAD((const NG_RV*)(w[0]+NG_RSTEP*h));
         NG_RV w1=NG_RLOAD((const NG_RV*)(w[1]+NG_RSTEP*h));
         NG_RV w2=NG_RLOAD((const NG_RV*)(w[2]+NG_RSTEP*h));
         NG_RV f=NG_RLOAD((const NG_RV*)(feature+NG_RSTEP*h));
+#endif
 #ifdef NG_RFUSED
         NG_RV previous_b=NG_RSET(0),previous_d=NG_RSET(0),previous_bd=NG_RSET(0);
         if(start){
@@ -37,6 +45,15 @@ NG_RATTR static inline void NG_RNAME(int width,const ng_bank_compact_column*cols
         for(int x=start;x<start+span&&x<width;){
             const ng_bank_compact_column*c=cols+x;
 #define NG_COMPACT_LOAD(F) NG_RLOAD((const NG_RV*)(c->F+NG_RSTEP*h))
+#ifdef NG_RBLOCKW
+            {
+                const int blocks=VCN_LC_D/(int)selector_edge,block=x/(int)selector_edge;
+                w0=NG_RLOAD((const NG_RV*)(block_w[block]+NG_RSTEP*h));
+                w1=NG_RLOAD((const NG_RV*)(block_w[blocks+block]+NG_RSTEP*h));
+                w2=NG_RLOAD((const NG_RV*)(block_w[2*blocks+block]+NG_RSTEP*h));
+                f=NG_RLOAD((const NG_RV*)(block_w[3*blocks+block]+NG_RSTEP*h));
+            }
+#endif
             NG_RV flags;
 #ifdef NG_RPACKED
             flags=_mm512_cvtepu8_epi16(_mm256_loadu_si256((const __m256i*)block_flags[x>>selector_shift]));

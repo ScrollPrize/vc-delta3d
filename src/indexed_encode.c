@@ -1,4 +1,5 @@
 #include "indexed_internal.h"
+#include <vc_delta3d/codec.h>
 #include "reader.h"
 static int plan_tree(domain root,const vc_partition_node*plan,size_t nodes,node**out,size_t*count) {
     domain*stack=NULL;node*t=NULL;size_t cap=0,tc=0,pending=0,used=0,step=0;
@@ -29,7 +30,7 @@ int vc_indexed_encode(const uint8_t*input,size_t input_size,const uint32_t shape
     unsigned layout,unsigned preset,const vc_partition_node*plan,size_t nodes,uint8_t**output,size_t*output_size) {
     if(!output||!output_size)return 0;*output=NULL;*output_size=0;
     uint64_t field;
-    if(!input||!shape||!channels||channels>INT32_MAX||layout>1||preset<3||preset>6||
+    if(!input||!shape||!channels||channels>INT32_MAX||layout>1||preset==VC_DELTA||!vc_preset_valid(preset)||
        (nodes&&!plan)||!voxels(shape,&field)||field>SIZE_MAX/channels||field*channels!=input_size)return 0;
     domain root={0};memcpy(root.shape,shape,sizeof(root.shape));root.channels=channels;
     node*t=NULL;size_t nt=0,nl=0;vc_indexed_leaf*leaves=NULL;
@@ -51,7 +52,7 @@ int vc_indexed_encode(const uint8_t*input,size_t input_size,const uint32_t shape
         if(payload.size>SIZE_MAX-131072||n>(SIZE_MAX-payload.size-131072)/4||
            !vc_reserve(&payload.data,&payload.capacity,payload.size+4*n+131072,1))goto fail;
         size_t bytes=0;uint8_t*dst=payload.data+payload.size;
-        int rc=vc_ng_preset_encode(src,l->shape[0],preset-3,dst,payload.capacity-payload.size,&bytes);
+        int rc=vc_ng_preset_encode(src,l->shape[0],preset,dst,payload.capacity-payload.size,&bytes);
         if(rc||bytes<8||bytes>payload.capacity-payload.size||memcmp(dst,"NCF1",4))goto fail;
         /* Embedded leaves share the container's codec identity. */
         memmove(dst,dst+4,bytes-4);l->length=bytes-4;payload.size+=bytes-4;

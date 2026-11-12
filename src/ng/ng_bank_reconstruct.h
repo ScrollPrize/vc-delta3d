@@ -20,28 +20,14 @@ static void ng_bank_delta_reconstruct(const uint8_t*choices,uint8_t*out){
 #include "ng_wave_column.h"
 
 #if VCN_HAVE_AVX2
-#define NG_RATTR __attribute__((target("avx2"),always_inline))
 #define NG_RNAME ng_bank_compact_avx2_impl
-#define NG_RV __m256i
-#define NG_RHALVES 2
-#define NG_RSTEP 16
-#define NG_RSET _mm256_set1_epi16
-#define NG_RLOAD _mm256_loadu_si256
-#define NG_RSTORE _mm256_storeu_si256
-#define NG_RAND _mm256_and_si256
-#define NG_REQ _mm256_cmpeq_epi16
-#define NG_RBLEND _mm256_blendv_epi8
-#define NG_RMASK _mm256_movemask_epi8
-#define NG_RADD _mm256_add_epi16
-#define NG_RMUL _mm256_mullo_epi16
-#define NG_RMIN _mm256_min_epi16
-#define NG_RMAX _mm256_max_epi16
-#define NG_RSRL _mm256_srli_epi16
-#define NG_RSRA _mm256_srai_epi16
-#define NG_RSLL _mm256_slli_epi16
-#define NG_RSUB _mm256_sub_epi16
-#define NG_RXOR _mm256_xor_si256
-#define NG_ROUT(P,V) _mm_storeu_si128((__m128i*)(P),_mm_packus_epi16(_mm256_castsi256_si128(V),_mm256_extracti128_si256(V,1)))
+#include "ng_recur_avx2_ops.h"
+#include "ng_recur_vector.h"
+/* The same recurrence with the in-row weights and the feature weight read per
+ * selector block (several fitted models in one wave). */
+#define NG_RNAME ng_bank_compact_blocks_avx2_impl
+#define NG_RBLOCKW 1
+#include "ng_recur_avx2_ops.h"
 #include "ng_recur_vector.h"
 #ifdef NG_HAVE_WIDE_PRE
 #define NG_RNAME ng_bank_compact_avx512_mask_impl
@@ -102,28 +88,12 @@ static inline int ng_gv_all(ng_gv m){
 #endif
 }
 static inline void ng_gv_out(uint8_t*p,ng_gv v){ng_gb b=__builtin_convertvector(v,ng_gb);memcpy(p,&b,8);}
-#define NG_RATTR __attribute__((always_inline))
 #define NG_RNAME ng_bank_compact_gv_impl
-#define NG_RV ng_gv
-#define NG_RHALVES 4
-#define NG_RSTEP 8
-#define NG_RSET(X) ((ng_gv){0}+(uint16_t)(X))
-#define NG_RLOAD(P) (*(const ng_gvu*)(const void*)(P))
-#define NG_RSTORE(P,V) (*(ng_gvu*)(void*)(P)=(V))
-#define NG_RAND(A,B) ((A)&(B))
-#define NG_REQ(A,B) ((ng_gv)((A)==(B)))
-#define NG_RBLEND(A,B,M) ng_gv_sel(M,A,B)
-#define NG_RMASK(V) (ng_gv_all(V)?-1:0)
-#define NG_RADD(A,B) ((A)+(B))
-#define NG_RMUL(A,B) ((A)*(B))
-#define NG_RMIN ng_gv_min
-#define NG_RMAX ng_gv_max
-#define NG_RSRL(A,N) ((A)>>(N))
-#define NG_RSRA(A,N) ((ng_gv)((ng_gs)(A)>>(N)))
-#define NG_RSLL(A,N) ((A)<<(N))
-#define NG_RSUB(A,B) ((A)-(B))
-#define NG_RXOR(A,B) ((A)^(B))
-#define NG_ROUT(P,V) ng_gv_out(P,V)
+#include "ng_recur_gv_ops.h"
+#include "ng_recur_vector.h"
+#define NG_RNAME ng_bank_compact_blocks_gv_impl
+#define NG_RBLOCKW 1
+#include "ng_recur_gv_ops.h"
 #include "ng_recur_vector.h"
 static void ng_bank_compact(int width,const ng_bank_compact_column*cols,const uint16_t w[3][32],const uint16_t*feature,uint16_t prev[3][32],uint8_t*result,int homogeneous){
 #if VCN_HAVE_AVX2
@@ -484,6 +454,109 @@ static void ng_bank_publish_wave(ng_published_wave*w){
             for(int j=0;j<nl;j++){memcpy(out+offset[j],rows[j],VCN_LC_D);vcn_lc_row_end(h->b,zs[j],ys[j]);}
 
 }
+
+/* Several fitted models in one frame (4^3 selector blocks). Per row of
+ * selector blocks, set up once per frame: which models the row uses and in
+ * which 32-voxel spans, and whether every block is a zero block or a fitted
+ * model without a fixed-predictor feature ("simple": such waves need no
+ * directional metadata). */
+typedef struct {uint32_t needed[4];uint8_t used,simple;} ng_multi_row;
+typedef struct {
+    ng_multi_row *rows;
+    uint8_t *segment;   /* per block: model index, or the model count for a fixed predictor */
+    uint8_t *local;     /* per block: selector with the model index removed */
+    uint16_t *weights;  /* per block row (then the z==0 forms of the first block rows), VCN_LC_D each: [k*blocks+b] */
+    uint32_t *table;    /* [segment*VCN_LC_AMAX+activity]: class bias | entropy class<<16 */
+} ng_multi_plan;
+static void ng_multi_plan_free(ng_multi_plan*m){free(m->rows);free(m->segment);free(m->local);free(m->weights);free(m->table);}
+static int ng_multi_plan_create(ng_multi_plan*m,const uint8_t*choices,unsigned count,ng_causal_state*const*model,const int32_t*weights,const vcn_lc_par*ep){
+    const int nb=VCN_LC_D/4,ny=VCN_LC_Y/4,nrows=ny*(VCN_LC_Z/4);
+    m->rows=calloc(nrows,sizeof(*m->rows));m->segment=malloc((size_t)nrows*nb);m->local=malloc((size_t)nrows*nb);
+    m->weights=calloc((size_t)(nrows+ny)*VCN_LC_D,sizeof(*m->weights));m->table=malloc((size_t)(count+1)*VCN_LC_AMAX*sizeof(*m->table));
+    if(!m->rows||!m->segment||!m->local||!m->weights||!m->table)return 0;
+    for(int r=0;r<nrows+ny;r++){
+        const int source=r<nrows?r:r-nrows,z0=r>=nrows;
+        ng_multi_row*row=m->rows+source;if(!z0)row->simple=1;
+        for(int bx=0;bx<nb;bx++){
+            const unsigned c=choices[source*nb+bx];if(c>=12+12*count)return 0;
+            const unsigned fitted=c>=12,v=fitted?c-12:0,k=v/12;
+            if(fitted){
+                const ng_causal_state*s=model[k];if(!s)return 0;
+                for(int t=0;t<3;t++)m->weights[(size_t)r*VCN_LC_D+t*nb+bx]=t<s->p->t.nrow?(uint16_t)s->p->w[z0][t]:0;
+                m->weights[(size_t)r*VCN_LC_D+3*nb+bx]=v%12?(uint16_t)weights[2*v+z0]:0;
+            }
+            if(z0)continue;
+            m->segment[source*nb+bx]=(uint8_t)(fitted?k:count);m->local[source*nb+bx]=(uint8_t)(fitted?12+v%12:c);
+            if(fitted){row->used|=(uint8_t)(1u<<k);row->needed[k]|=1u<<((bx*4)/32);}
+            if(fitted?v%12!=0:c!=0)row->simple=0;
+        }
+    }
+    for(unsigned k=0;k<=count;k++)for(int a=0;a<VCN_LC_AMAX;a++)
+        m->table[k*VCN_LC_AMAX+a]=(k<count&&model[k]?(uint16_t)model[k]->p->cb[model[k]->p->lut[a]]:0)|((uint32_t)ep->lut[a]<<16);
+    return 1;
+}
+/* One row: the selected model's previous-row sums plus its class bias, and
+ * the entropy classes, from one activity pass. q[k*stride+x] holds model k. */
+static void ng_multi_class_merge_c(const uint8_t*e,size_t ri,const uint32_t*table,const uint8_t*segment,unsigned count,
+    const uint16_t*q,size_t stride,uint16_t*restrict pre,uint8_t*restrict entropy_class){
+    _Alignas(32) uint16_t activity[VCN_LC_D];
+    vcn_lc_apre(e,ri,activity);
+    for(int x=0;x<VCN_LC_D;x++){
+        const unsigned k=segment[x>>2];const uint32_t value=table[k*VCN_LC_AMAX+activity[x]];
+        pre[x]=(uint16_t)(value+(k<count?q[k*stride+x]:0));entropy_class[x]=(uint8_t)(value>>16);
+    }
+}
+#if VCN_HAVE_AVX2
+__attribute__((target("avx2"))) static void ng_multi_class_merge_avx2(const uint8_t*e,size_t ri,const uint32_t*table,const uint8_t*segment,unsigned count,
+    const uint16_t*q,size_t stride,uint16_t*restrict pre,uint8_t*restrict entropy_class){
+    const __m256i mask=_mm256_set1_epi32(65535),scale=_mm256_set1_epi32(VCN_LC_AMAX);
+    const __m128i spread=_mm_setr_epi8(0,0,0,0,1,1,1,1,-1,-1,-1,-1,-1,-1,-1,-1);
+    __m256i act=_mm256_setzero_si256();
+    for(int x=0;x<VCN_LC_D;x+=8){
+        if(!(x&15))act=vcn_lc_activity16(e,ri+x);
+        __m128i a=(x&8)?_mm256_extracti128_si256(act,1):_mm256_castsi256_si128(act);
+        uint16_t pair;memcpy(&pair,segment+(x>>2),2);
+        const __m128i s8=_mm_shuffle_epi8(_mm_cvtsi32_si128(pair),spread),s16=_mm_cvtepu8_epi16(s8);
+        __m256i ix=_mm256_add_epi32(_mm256_cvtepu16_epi32(a),_mm256_mullo_epi32(_mm256_cvtepu8_epi32(s8),scale));
+        __m256i values=_mm256_i32gather_epi32((const int*)table,ix,4);
+        __m256i bias=_mm256_and_si256(values,mask);
+        __m128i sum=_mm_packus_epi32(_mm256_castsi256_si128(bias),_mm256_extracti128_si256(bias,1));
+        for(unsigned k=0;k<count;k++)
+            sum=_mm_add_epi16(sum,_mm_and_si128(_mm_cmpeq_epi16(s16,_mm_set1_epi16((short)k)),_mm_loadu_si128((const __m128i*)(q+k*stride+x))));
+        _mm_storeu_si128((__m128i*)(pre+x),sum);
+        __m256i cls=_mm256_srli_epi32(values,16);
+        __m128i c=_mm_packus_epi32(_mm256_castsi256_si128(cls),_mm256_extracti128_si256(cls,1));
+        _mm_storel_epi64((__m128i*)(entropy_class+x),_mm_packus_epi16(c,c));
+    }
+}
+__attribute__((target("avx2"))) static void ng_bank_compact_blocks_avx2(int width,const ng_bank_compact_column*cols,const uint16_t (*block_w)[32],uint16_t prev[3][32],uint8_t*result,int homogeneous){
+    if(homogeneous)ng_bank_compact_blocks_avx2_impl(width,cols,NULL,NULL,prev,result,1,block_w);
+    else ng_bank_compact_blocks_avx2_impl(width,cols,NULL,NULL,prev,result,0,block_w);
+}
+#endif
+static void ng_multi_class_merge(const uint8_t*e,size_t ri,const uint32_t*table,const uint8_t*segment,unsigned count,
+    const uint16_t*q,size_t stride,uint16_t*restrict pre,uint8_t*restrict entropy_class){
+#if VCN_HAVE_AVX2
+    if(vcn_use_avx2()){ng_multi_class_merge_avx2(e,ri,table,segment,count,q,stride,pre,entropy_class);return;}
+#endif
+    ng_multi_class_merge_c(e,ri,table,segment,count,q,stride,pre,entropy_class);
+}
+/* rows[j][k*blocks+b] -> block_w[k*blocks+b][j], then the recurrence over the whole wave. */
+static void ng_bank_compact_blocks(int nl,int width,const ng_bank_compact_column*cols,const uint16_t (*rows)[VCN_LC_D],uint16_t (*block_w)[32],uint16_t prev[3][32],uint8_t*result,int homogeneous){
+#if VCN_HAVE_AVX2
+    if(vcn_use_avx2()){
+        vcn_lc_tr_a_stride(nl,rows,block_w[0],32);
+        ng_bank_compact_blocks_avx2(width,cols,(const uint16_t(*)[32])block_w,prev,result,homogeneous);return;
+    }
+#endif
+#if VCN_HAVE_NEON
+    vcn_lc_tr_a_neon(nl,rows,block_w);
+#else
+    for(int j=0;j<nl;j++)for(int x=0;x<VCN_LC_D;x++)block_w[x][j]=rows[j][x];
+#endif
+    if(homogeneous)ng_bank_compact_blocks_gv_impl(width,cols,NULL,NULL,prev,result,1,(const uint16_t(*)[32])block_w);
+    else ng_bank_compact_blocks_gv_impl(width,cols,NULL,NULL,prev,result,0,(const uint16_t(*)[32])block_w);
+}
 static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int32_t* weights,const uint8_t* choices,uint8_t* out,const uint8_t* entropy,size_t entropy_size,const ng_decode_context*ctx){
     const unsigned edge=ng_choice_edge;
     const unsigned edge_shift=edge==2?1:edge==4?2:edge==8?3:edge==16?4:5;
@@ -514,6 +587,10 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
     }
 
     if(edge!=4&&!full){full=1;compact=vectorprep=packed_metadata=0;}
+    /* Several fitted models with 4^3 selectors: whole-row preparation and one
+     * recurrence call per wave, with the in-row weights read per block. */
+    ng_multi_plan plan={0};
+    const int multi=!common&&full&&compact&&edge==4&&entropy;
     uint16_t common_feature[2]={256,256};int feature_model=-1;
     int delta_only=common||compact;
     if(delta_only)for(size_t i=0;i<(size_t)((VCN_LC_D>>edge_shift))*((VCN_LC_Y>>edge_shift))*((VCN_LC_Z>>edge_shift));i++)if(choices[i]>=8){delta_only=0;break;}
@@ -531,7 +608,7 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
     int need_multi_pre=(count>1)||(edge!=4&&!common);
     uint16_t* multi_pre=need_multi_pre?calloc((count)*32*VCN_LC_D,sizeof(uint16_t)):NULL;
     if(need_multi_pre&&!multi_pre){free(activity);return -1;}
-    uint16_t* shared_pre=common?calloc((size_t)VCN_LC_D*32,sizeof(*shared_pre)):NULL;
+    uint16_t* shared_pre=common||multi?calloc((size_t)VCN_LC_D*32,sizeof(*shared_pre)):NULL;
     unsigned* needed_rows=common?calloc(((VCN_LC_Y>>edge_shift))*((VCN_LC_Z>>edge_shift)),sizeof(unsigned)):NULL;
     /* A cache-line skew between field planes avoids eleven stores to the
      * same cache set on every voxel (128-wide planes otherwise alias). */
@@ -554,7 +631,7 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
     uint8_t* history_owner=packed_metadata?calloc(1,history_depth*history_plane+63):NULL;
     uint8_t* wave_history=history_owner?(uint8_t*)(((uintptr_t)history_owner+63)&~(uintptr_t)63):history_owner;
     if(packed_metadata&&!wave_history)goto done;
-    if(!activity||(common&&!shared_pre)||(compact&&!compactcols)||(full&&(!field_storage||!transposed||!fullcols||!fullvalues))||vcn_lc_mksched(dl,&sc))goto done;
+    if(!activity||((common||multi)&&!shared_pre)||(compact&&!compactcols)||(full&&(!field_storage||!transposed||!fullcols||!fullvalues))||vcn_lc_mksched(dl,&sc))goto done;
 
     if(common){
         if(!needed_rows)goto done;
@@ -587,6 +664,7 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
             for(int a=0;a<VCN_LC_AMAX;a++)class_table[a]=(uint16_t)h->p->cb[h->p->lut[a]]|((uint32_t)ep->lut[a]<<16);
         }
 #endif
+        if(multi&&!delta_only&&!ng_multi_plan_create(&plan,choices,count,model,weights,ep))goto done;
     }
     for(int g=0;g<sc.ng;g++){
 
@@ -595,6 +673,12 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
         if(packed_metadata)memset(flag_rows,0,sizeof(flag_rows));
         uint16_t prev[3][32]={{0}},row_weights[3][32]={{0}},row_feature[32]={0};int nl=sc.n[g];
         size_t ri[32],offset[32];int zs[32]={0},ys[32]={0};const uint8_t* selected[32];
+        int wave_simple=0;
+        uint16_t block_rows[multi?32:1][VCN_LC_D],block_w[multi?VCN_LC_D:1][32];
+        if(multi&&!delta_only){
+            wave_simple=1;
+            for(int j=0;j<nl;j++)wave_simple&=plan.rows[((sc.row[g][j]/VCN_LC_Y)>>2)*(VCN_LC_Y>>2)+((sc.row[g][j]%VCN_LC_Y)>>2)].simple;
+        }
         for(int j=0;j<nl;j++){
             int entropy_class_ready=0;
             int z=zs[j]=sc.row[g][j]/VCN_LC_Y,y=ys[j]=sc.row[g][j]%VCN_LC_Y;ri[j]=VCN_LC_IDX(z,y,0);offset[j]=(size_t)sc.row[g][j]*VCN_LC_D;
@@ -652,7 +736,20 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                     VCN_LC_CLS(h->e,ri[j],h->p,pp,h->classes);
                     }
                 }
-            }else{vcn_lc_apre(h->e,ri[j],activity+j*VCN_LC_D);
+            }else if(multi){
+                const int block_row=(z>>2)*(VCN_LC_Y>>2)+(y>>2);const ng_multi_row*row=plan.rows+block_row;
+                for(unsigned k=0;k<count;k++)if(row->used&(1u<<k)){
+                    ng_causal_state*s=model[k];uint16_t*q=multi_pre+(k*32+j)*VCN_LC_D;
+#ifdef NG_HAVE_WIDE_PRE
+                    if(VCN_LC_D>=64&&VCN_LC_D%64==0&&ng_use_avx512()&&__builtin_cpu_supports("avx512bw"))vcn_lc_pre_avx512_impl(h->b+ri[j],&s->pl[z==0],(uint16_t)s->p->bias[z==0],q,row->needed[k]);else
+#endif
+                    vcn_lc_pre_selected(h->b+ri[j],&s->pl[z==0],(uint16_t)s->p->bias[z==0],q,row->needed[k]);
+                }
+                ng_multi_class_merge(h->e,ri[j],plan.table,plan.segment+block_row*(VCN_LC_D>>2),count,multi_pre+j*VCN_LC_D,(size_t)32*VCN_LC_D,
+                    wave_simple?fields[0][j]:shared_pre+j*VCN_LC_D,entropy_classes[j]);
+                entropy_class_ready=1;
+                memcpy(block_rows[j],plan.weights+(size_t)(z?block_row:(VCN_LC_Y>>2)*(VCN_LC_Z>>2)+(y>>2))*VCN_LC_D,sizeof(block_rows[j]));
+            }else{if(common||!multi_pre)vcn_lc_apre(h->e,ri[j],activity+j*VCN_LC_D);
             if(common){
                 uint16_t* pp=shared_pre+j*VCN_LC_D;
                 VCN_LC_PRE(h->b+ri[j],&h->pl[z==0],(uint16_t)h->p->bias[z==0],pp);
@@ -727,6 +824,16 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                     for(int x=0;x<VCN_LC_D;x++)fields[2][j][x]=(uint16_t)entropy_symbols[j][x]<<8;
                     continue;
                 }
+                if(multi){
+                    if(wave_simple){for(int x=0;x<VCN_LC_D;x++)fields[2][j][x]=(uint16_t)out[o+x]<<8;continue;}
+                    const uint8_t*local=plan.local+((z>>2)*(VCN_LC_Y>>2)+(y>>2))*(VCN_LC_D>>2);
+                    uint16_t*fp[11]={0};for(int f=0;f<nf;f++)fp[f]=fields[f][j];
+#if VCN_HAVE_AVX2
+                    if(vcn_use_avx2())ng_bank_prepare_avx2(h->b+ri[j],out+o,local,shared_pre+j*VCN_LC_D,y,z,h->p,0,fp,1,0,0);else
+#endif
+                    ng_bank_prepare_portable(h->b+ri[j],out+o,local,shared_pre+j*VCN_LC_D,y,z,fp,0,edge_shift);
+                    continue;
+                }
                 if(compact&&!vcn_use_avx2()&&(vectorprep||(!common&&multi_pre&&mode))){
                     uint16_t*fp[4];for(int f=0;f<4;f++)fp[f]=fields[f][j];
                     if(vectorprep)ng_bank_prepare_portable(h->b+ri[j],entropy_symbols[j],selected[j],shared_pre+j*VCN_LC_D,y,z,fp,ctx->frequent_x,edge_shift);
@@ -789,7 +896,7 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
             for(int f=0;f<nf;f++){
                 if(packed_metadata&&f==2)continue;
                 if(fused_base&&f!=0)continue;
-                if(homogeneous&&f!=0&&f!=2)continue;
+                if((homogeneous||wave_simple)&&f!=0&&f!=2)continue;
 #if VCN_HAVE_AVX2
                 if(compact&&vcn_use_avx2()){
                     vcn_lc_tr_a_stride(nl,(const uint16_t(*)[VCN_LC_D])fields[f],
@@ -805,7 +912,8 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
                 for(int x=0;x<VCN_LC_D;x++)memcpy(compact?(uint8_t*)(compactcols+x)+compact_offsets[f]:(uint8_t*)(fullcols+x)+offsets[f],transposed[x],64);
             }
              if(compact){
-                if(!common){
+                if(multi)ng_bank_compact_blocks(nl,VCN_LC_D,compactcols,(const uint16_t(*)[VCN_LC_D])block_rows,block_w,prev,fullvalues[0],wave_simple);
+                else if(!common){
                     for(int bx=0;bx<(VCN_LC_D>>edge_shift);bx++){
                         for(int j=0;j<nl;j++){
                             unsigned c=selected[j][bx],m=c>=12?c-12:0;ng_causal_state*s=c>=12?model[m/12]:h;
@@ -866,5 +974,5 @@ static int ng_bank_reconstruct_core(void* const* states,unsigned mode,const int3
 }
     if(delta_only)ng_bank_delta_reconstruct(choices,out);
     rc=0;
-done:free(multi_pre);free(history_owner);free(class_table);free(needed_rows);free(ep);free(tables);free(entropy_classes);free(entropy_symbols);free(sc.row);free(sc.n);free(activity);free(shared_pre);free(field_storage);free(transposed);free(fullcols);free(compactcols);free(fullvalues);return rc;
+done:ng_multi_plan_free(&plan);free(multi_pre);free(history_owner);free(class_table);free(needed_rows);free(ep);free(tables);free(entropy_classes);free(entropy_symbols);free(sc.row);free(sc.n);free(activity);free(shared_pre);free(field_storage);free(transposed);free(fullcols);free(compactcols);free(fullvalues);return rc;
 }

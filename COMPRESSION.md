@@ -18,7 +18,7 @@ The presets differ in how good the prediction is and how much the encoder
 searches to find it. Decoding never searches: it reads the chosen
 configuration from the frame and replays it.
 
-## The preset codec (NCF1: fast, medium, slow, slower)
+## The preset codec (NCF1: faster, fast, balanced, small, slower; medium, slow)
 
 Used for uint8 chunks whose dimensions are multiples of 32. It combines Chase
 Hendrick's NG context modelling with Delta3D's directional predictors.
@@ -46,11 +46,12 @@ avoid overshooting at edges.
 
 **Learned linear predictors (models).** A weighted sum over a much larger
 causal neighbourhood: up to 3 voxels back in the current row, 7 voxels in each
-of the three rows above, a 7×7 window in the previous slice, and a 3×3 window
-two slices back (82 candidate voxels; `slower` uses 7×7 there too, 122
-candidates). The encoder fits one set of weights per chunk by least squares,
-keeps the 40 most useful taps (`slower`: all), and rounds the weights to
-multiples of 1/256. The neighbourhood is independent of the 4³ blocks
+of the three rows above, a 7×7 window in the previous slice, and a window two
+slices back that is 3×3, 5×5 or 7×7 depending on the preset (82, 98 or 122
+candidate voxels). The encoder fits one set of weights by least squares, keeps
+the most useful 40 to 72 of them (`slower`: all), and rounds the weights to
+multiples of 1/256. A frame can carry several models; `small` fits two and
+lets every block choose. The neighbourhood is independent of the 4³ blocks
 described below and reads across their boundaries. One fixed predictor's
 output is an extra input with its own learned weight, so a model refines a
 fixed predictor rather than replacing it. The first slice, which has no
@@ -92,22 +93,37 @@ The symbols are coded with rANS, but not with one global distribution:
 
 ### What the presets do
 
-| Preset | Encoder search |
-|---|---|
-| `fast` | Tries all 12 fixed predictors on a 32³ sample of the chunk, fits a model for the two best, and keeps the cheapest single option (fixed or learned) for all non-empty blocks. All-zero blocks use the zero predictor. |
-| `medium` | Keeps up to three candidates (a fixed predictor, a learned model and a third screened candidate), each with its own entropy bank, and chooses per block; one reselection pass, and the best single candidate is tried too. |
-| `slow` | Beam search over menus of one to three entries from 25 candidates (fixed predictors and up to 13 models) on a sample, then fits the finalists at full resolution on all voxels and keeps the smallest frame. |
-| `slower` | Like `slow`, with a larger neighbourhood (more previous-slice taps) and up to 160 instead of 40 model taps. |
+| Preset | Candidates / kept | Fit sample | Encoder search |
+|---|---|---|---|
+| `faster` | 82 / 40 | one voxel per row | Tries all 12 fixed predictors on a 32³ sample of the chunk, fits a model for the two best, and keeps the cheapest single option (fixed or learned) for all non-empty blocks. All-zero blocks use the zero predictor. This is the `fast` preset of 0.3.x. |
+| `fast` | 98 / 56 | one voxel per row | As `faster`, with a larger neighbourhood and more weights kept. |
+| `balanced` | 122 / 72 | every 32nd voxel | As `fast`, with the full neighbourhood and a denser fit. |
+| `small` | 98 / 72 | every 32nd voxel | Two models. One model is fitted on the whole chunk and the blocks are split by the size of its residuals; each model is then refitted on its own blocks and every block moves to the model that codes it most cheaply. Each model has its own entropy bank. |
+| `slower` | 122 / all | every voxel | Beam search over menus of one to three entries from 25 candidates (fixed predictors and up to 13 models) on a sample, then fits the finalists at full resolution and keeps the smallest frame. |
+| `medium` | 82 / 40 | subsample | From 0.3.x. Keeps up to three candidates (a fixed predictor, a learned model and a third screened candidate), each with its own entropy bank, and chooses per block; one reselection pass, and the best single candidate is tried too. |
+| `slow` | 82 / 40 | every voxel | From 0.3.x. The menu search of `slower` with the smaller neighbourhood. |
 
-`fast` and `medium` fit their models on a subsample of voxels; `slow` and
-`slower` fit on every voxel. How much the slower presets gain depends on the
-data: on scroll CT they are within 1.5% of `fast`, on smoother derived volumes
-up to about 5%, at about 4× (`medium`) to 40–60× (`slower`) the encode time of `fast`
-(see [BENCHMARKS.md](BENCHMARKS.md)). Decoding does the
-same kind of work for every preset, but menus with more entries and models
-with more taps cost more per voxel. On x86, `medium` takes about 15–30% longer
-to decode than `fast`, `slow` 25–50% and `slower` 40–60%; on ARM about 15%,
-25–35% and 60–65%. See [BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
+`small` also encodes the chunk the way `fast` does and keeps that frame when
+it is smaller, which is the case for data that a fixed predictor codes best.
+
+How much the smaller presets gain depends on the data. On level-0 scroll CT,
+`fast` is 0.2 to 1.4% smaller than `faster`, `balanced` 0.3 to 2.3% and `small`
+0.5 to 4.8%; on downsampled levels the gains are a few tenths of a percent.
+`balanced` takes about 1.3 to 1.8 times and `small` 5 to 6 times the encode
+time of `faster`; `slower` takes 30 to 60 times.
+
+Decoding does the same kind of work for every preset. Each kept weight costs
+about 0.3% of decode time on x86 and 0.45% on ARM, and each extra model one
+more sum over the earlier rows. Against `faster`, `fast` takes 4 to 10% longer
+to decode, `balanced` 8 to 19% and `small` 20 to 51%, depending on the CPU. See
+[BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
+
+`medium` and `slow` are kept from 0.3.x. On scroll CT they are not worth their
+encode time (`medium` matches `faster` in size, `slow` is behind `small`), but
+they let every block choose among fixed predictors, which `faster` to `small`
+do not. On some derived volumes that matters: on surface-normal components
+(nx, ny) `medium` is 11 to 12% smaller than `faster`, where `small` gains 5 to
+9%. `slower` matches or beats `slow` everywhere measured.
 
 The encoder's choices are not part of the format: a future encoder can pick
 other menus, models, class counts or block sizes (2–32) without changing the

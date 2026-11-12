@@ -21,6 +21,20 @@ arrays, either a bare zarr array or a `0..N` multiscale pyramid group.
 
 Keep `--seed` fixed (default) so reruns reuse the cached chunk sample.
 
+## Encoder ladder
+
+`ladder.c` measures size, encode time and decode time of encoder settings and
+presets on 128³ uint8 chunks, relative to each other in one run. It links the
+static library to reach the internal tuning entry point:
+
+```sh
+cc -O2 -Iinclude benchmark/ladder.c build/libvc_delta3d.a -lm -o ladder
+./ladder 7 1,40,128,0,1,0 2,56,128,0,1,0 delta slower -- chunk1.raw chunk2.raw
+```
+
+A setting is `reach,taps,stride,intercept,models,rounds` (`vc_ng_tuning` in
+`src/ng/ng_frame.h`); the first two above are `faster` and `fast`.
+
 ## Header table generator
 
 `header_static.c` generated the fixed header frequency tables in

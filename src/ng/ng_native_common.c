@@ -6,10 +6,10 @@
 
 _Thread_local ng_geometry ng_current_geometry={NG_BLOCK_DIM,NG_BLOCK_DIM,NG_BLOCK_DIM};
 _Thread_local unsigned ng_choice_edge=4;
-_Thread_local int ng_disable_avx512=0;
+_Thread_local int ng_disable_avx512=0,ng_disable_avx2=0;
 int ng_set_isa_limit(int bits){
-    if(bits!=0&&bits!=256)return -1;
-    ng_disable_avx512=bits==256;return 0;
+    if(bits!=0&&bits!=256&&bits!=128)return -1;
+    ng_disable_avx512=bits!=0;ng_disable_avx2=bits==128;return 0;
 }
 _Thread_local double ng_fit_intercept_weight=0.; /* relative to real sample mass */
 

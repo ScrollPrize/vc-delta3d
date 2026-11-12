@@ -56,8 +56,8 @@ namespace vc_delta3d {
 // Presets emit NCF1 for scalar cubes and NGI1 for indexed spatial/channel
 // partitions. Regular APIs fall back to legacy Delta/D3D1 for 16-bit data,
 // quantization, or dimensions not divisible by32; invalid inputs still fail.
-enum class Predictor { Delta = 1, Fast = 3, Medium = 4,
-                       Slow = 5, Slower = 6 };
+enum class Predictor { Delta = 1, Fast = 3, Medium = 4, Slow = 5, Slower = 6,
+                       Faster = 8, Balanced = 9, Small = 10 };
 
 // Multi-channel chunks (format version 2) are a container of independent
 // version-1 payloads, one per channel, each coding that channel's z, y, x

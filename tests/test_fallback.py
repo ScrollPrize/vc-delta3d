@@ -6,7 +6,7 @@ import pytest
 from vc_delta3d import Delta3D
 
 
-@pytest.mark.parametrize('preset', ['fast', 'medium', 'slow', 'slower'])
+@pytest.mark.parametrize('preset', ['faster', 'fast', 'balanced', 'small', 'medium', 'slow', 'slower'])
 @pytest.mark.parametrize('layout', [None, 'first', 'last'])
 @pytest.mark.parametrize('dtype,shape,quant', [
     (np.uint16, (32,32,32), 1),

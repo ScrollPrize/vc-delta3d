@@ -27,7 +27,7 @@ def raw_index(shape,channels,template,lengths,last=False):
     struct.pack_into('<I',h,4,len(h));return bytes(h)
 
 @pytest.mark.parametrize('last',[False,True])
-@pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
+@pytest.mark.parametrize('preset',['faster','fast','balanced','small','medium','slow','slower'])
 def test_independent_ranges_and_compact_header(last,preset):
     a=np.random.default_rng(781).integers(0,256,(3,32,32,32),dtype=np.uint8)
     raw=np.ascontiguousarray(np.moveaxis(a,0,-1)) if last else a
@@ -78,7 +78,7 @@ def test_auto_spatial_subdivision():
     assert len(index.leaves)==6
     np.testing.assert_array_equal(np.frombuffer(Delta3D().decode(f),np.uint8).reshape(a.shape),a)
 
-@pytest.mark.parametrize('preset',['fast','medium','slow','slower'])
+@pytest.mark.parametrize('preset',['faster','fast','balanced','small','medium','slow','slower'])
 def test_rectangular_chunk_uses_requested_preset(preset):
     a=np.random.default_rng(785).integers(0,256,(32,64,32),dtype=np.uint8)
     f=encode(a,predictor=preset);index=read_index(f,len(f))

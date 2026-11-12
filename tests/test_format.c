@@ -78,8 +78,9 @@ int main(void){
     rank[3]=-1;vc_ng_top_two(rank,top);assert(top[0]==3&&top[1]==7);
     const unsigned edges[]={2,4,8,16,32},classes[]={2,16,32};
     unsigned cases=0;
-    for(unsigned isa=0;isa<2;isa++){
-        assert(!ng_set_isa_limit(isa?256:0));
+    /* Automatic, without AVX-512, and the plain C kernels. */
+    for(unsigned isa=0;isa<3;isa++){
+        assert(!ng_set_isa_limit(isa==0?0:isa==1?256:128));
         for(unsigned e=0;e<5;e++)for(unsigned nm=0;nm<=4;nm++)
             for(unsigned b=1;b<=3;b+=2)for(unsigned k=0;k<3;k++)for(unsigned mode=0;mode<2;mode++){
                 run(edges[e],nm,b,classes[k],mode,32,0);cases++;

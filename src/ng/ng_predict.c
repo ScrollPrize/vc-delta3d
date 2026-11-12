@@ -112,7 +112,7 @@ static int clamp_i(int x,int l,int h){return x<l?l:x>h?h:x;}
 static inline void fixed_single(const uint8_t* __restrict src,uint8_t* __restrict out,unsigned d,unsigned M){
     int simd=0;
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    simd=__builtin_cpu_supports("avx2");
+    simd=!ng_disable_avx2&&__builtin_cpu_supports("avx2");
     uint8_t* outputs[12]={0};outputs[M]=out;
 #endif
     for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++){
@@ -152,7 +152,7 @@ void vc_ng_fixed_candidates(const uint8_t* restrict src,uint8_t* const* buffers,
     const size_t plane=(size_t)d*d;
     int simd=0;
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    simd=__builtin_cpu_supports("avx2");
+    simd=!ng_disable_avx2&&__builtin_cpu_supports("avx2");
 #endif
     for(unsigned z=0;z<d;z++)for(unsigned y=0;y<d;y++){
         const size_t row=((size_t)z*d+y)*d;

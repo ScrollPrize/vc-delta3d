@@ -83,6 +83,7 @@ static inline uint32_t vcn_rd32(const uint8_t *p) {
 #define VCN_HAVE_AVX2 1
 static inline int vcn_use_avx2(void) {
   static int v = -1;
+  if (ng_disable_avx2) return 0;
   int r = VCN_LD(&v);
   if (r < 0) {
     r = __builtin_cpu_supports("avx2") ? 1 : 0;

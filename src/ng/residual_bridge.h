@@ -31,7 +31,7 @@ size_t ng_write_freq_table(uint8_t*,const uint16_t*);
 int ng_read_freq_table(const uint8_t*,size_t,uint16_t*,size_t*);
 int ng_read_freq_table_scaled(const uint8_t*,size_t,uint16_t*,unsigned,size_t*);
 double ng_hist_cost_logs(const uint32_t*,int,const double*);
-int ng_set_isa_limit(int); /* 0 automatic, 256 excludes AVX-512, per thread */
+int ng_set_isa_limit(int); /* 0 automatic, 256 excludes AVX-512, 128 also AVX2 (plain C kernels); per thread */
 int ng_activity_symbol_values(const uint8_t*,uint16_t*);
 int ng_activity_symbol_histogram(const uint8_t*,uint16_t*,uint32_t*);
 /* Shared exact directional bases. Clamping is before modulo conversion, not

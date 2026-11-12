@@ -73,7 +73,7 @@ def test_unsharded_chunk_is_a_plain_frame():
     assert raw[:4] == b"NCF1"
 
 
-@pytest.mark.parametrize("predictor", ["fast", "slower", "delta"])
+@pytest.mark.parametrize("predictor", ["faster", "fast", "small", "slower", "delta"])
 def test_sharded_roundtrip_with_partial_shards(predictor):
     # 200 x 160 x 96 leaves partial shards and partial inner chunks on every axis.
     data = volume((200, 160, 96))
