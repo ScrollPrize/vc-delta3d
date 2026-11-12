@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(vc_delta3d VERSION 0.3.1 LANGUAGES C)
+project(vc_delta3d VERSION 0.3.2 LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
