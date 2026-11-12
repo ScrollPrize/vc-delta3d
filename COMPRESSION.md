@@ -94,12 +94,14 @@ The symbols are coded with rANS, but not with one global distribution:
 | `slower` | Like `slow`, with a larger neighbourhood (more previous-slice taps) and up to 160 instead of 40 model taps. |
 
 `fast` and `medium` fit their models on a subsample of voxels; `slow` and
-`slower` fit on every voxel. The step from `fast` to `medium` brings the
-largest gain per encode time; `slow` and `slower` add little size at a much
-higher encode cost (see [BENCHMARKS.md](BENCHMARKS.md)). Decoding does the
-same kind of work for every preset, so `fast` and `medium` decode at the same
-speed and `slow` takes about 8% longer. `slower` takes about 35–45% longer than
-`fast`, because its models have more taps (measured on Graviton2–5, 0.3.0).
+`slower` fit on every voxel. How much the slower presets gain depends on the
+data: on scroll CT they are within 1.5% of `fast`, on smoother derived volumes
+up to about 5%, at about 4× (`medium`) to 40–60× (`slower`) the encode time of `fast`
+(see [BENCHMARKS.md](BENCHMARKS.md)). Decoding does the
+same kind of work for every preset, but menus with more entries and models
+with more taps cost more per voxel. On x86, `medium` takes about 15–30% longer
+to decode than `fast`, `slow` 25–50% and `slower` 40–60%; on ARM the gaps are
+smaller. See [BENCHMARKS.md](BENCHMARKS.md) for measured numbers.
 
 The encoder's choices are not part of the format: a future encoder can pick
 other menus, models, class counts or block sizes (2–32) without changing the
