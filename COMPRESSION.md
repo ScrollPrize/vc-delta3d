@@ -97,9 +97,9 @@ The symbols are coded with rANS, but not with one global distribution:
 `slower` fit on every voxel. The step from `fast` to `medium` brings the
 largest gain per encode time; `slow` and `slower` add little size at a much
 higher encode cost (see [BENCHMARKS.md](BENCHMARKS.md)). Decoding does the
-same kind of work for every preset, so `fast`, `medium` and `slow` decode at
-about the same speed; `slower` is roughly a third slower because its models
-have more taps.
+same kind of work for every preset, so `fast` and `medium` decode at the same
+speed and `slow` takes about 8% longer. `slower` takes about 35–45% longer than
+`fast`, because its models have more taps (measured on Graviton2–5, 0.3.0).
 
 The encoder's choices are not part of the format: a future encoder can pick
 other menus, models, class counts or block sizes (2–32) without changing the
