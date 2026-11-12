@@ -1,7 +1,8 @@
 # VC-Delta3D
 
-A native C volume codec with four presets: **fast** (default), **medium**,
-**slow**, and **slower**. It combines Chase Hendrick's NG prediction with
+A native C volume codec with six presets, from fastest to smallest: **delta**,
+**faster**, **fast** (default), **balanced**, **small** and **slower**; the
+**medium** and **slow** presets of 0.3.x are kept as well. It combines Chase Hendrick's NG prediction with
 Sean Johnson's Delta3D directional predictors. Both MIT notices are retained;
 see [AUTHORS.md](AUTHORS.md).
 
@@ -11,18 +12,22 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 
 ## Performance
 
-Scroll CT, 77 masked level-0 128³ chunks, one core
+Scroll CT, 95 masked level-0 128³ chunks from five scrolls, one core
 (full tables for 10 EC2 instance types in [BENCHMARKS.md](BENCHMARKS.md)):
 
 |Preset|Size (% raw)|Encode MiB/s (c7i / c8g)|Decode MiB/s (c7i / c8g)|
 |---|---:|---:|---:|
-|delta|36.3|215 / 269|452 / 701|
-|fast|26.8|62.5 / 48.7|281 / 118|
-|medium|26.8|14.5 / 13.0|216 / 101|
-|slower¹|26.5|1.7 / 0.8|183 / 71.8|
+|delta|37.0|216 / 258|477 / 686|
+|faster|27.0|65.6 / 47.0|307 / 118|
+|fast|26.8|64.3 / 43.9|292 / 110|
+|balanced|26.7|48.1 / 27.3|280 / 103|
+|small|26.6|15.2 / 11.1|207 / 75.6|
+|slower|26.7|2.1 / 0.9|240 / 78.6|
 
-c7i: Intel Sapphire Rapids; c8g: Graviton4. ¹On a 16-chunk subset. [COMPRESSION.md](COMPRESSION.md)
-explains what the presets do.
+c7i: Intel Sapphire Rapids; c8g: Graviton4. `faster` is the `fast` preset of
+0.3.x. Provisional numbers: the `small` encode speed is about 25% too high. How much the smaller presets gain depends on the data; see
+[BENCHMARKS.md](BENCHMARKS.md). [COMPRESSION.md](COMPRESSION.md) explains what
+the presets do.
 
 ## Formats and compatibility
 
@@ -86,6 +91,9 @@ multichannel = Delta3D(channel_axis="last")
 ```
 
 Importing the Python package registers `vc-delta3d` with numcodecs.
+`predictor` names the encoder preset (`delta`, `faster`, `fast`, `balanced`,
+`small`, `slower`, and `medium` and `slow` from 0.3.x). It only affects
+encoding: arrays written with any preset open and decode with any setting.
 
 ## Build and test
 

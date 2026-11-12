@@ -11,10 +11,11 @@ Public IDs are defined in `include/vc_delta3d/codec.h`:
 
 | Preset | Policy |
 |---|---|
-| fast | Occupancy-aware screening; one selected predictor for nonzero blocks; DP64 entropy thresholds. |
-| medium | Direct, NG and a screened third candidate with independent residual statistics; one reselection; compare the screened singleton. |
-| slow | Broader independent-model menu search, selected-tap fits and dense regularized sufficient statistics. |
-| slower | Same menu policy with expanded predictor neighborhood/coefficient budget. |
+| faster, fast, balanced | Occupancy-aware screening; one selected predictor for nonzero blocks; DP64 entropy thresholds. They differ in neighbourhood, weights kept and fit sampling (`ng_presets.c`). |
+| small | Block modes: two models, each refitted on the blocks that select it; one entropy bank per model. |
+| slower | Independent-model menu search, selected-tap fits and dense regularized sufficient statistics, with the full neighbourhood. |
+| medium | From 0.3.x: direct, NG and a screened third candidate with independent residual statistics; one reselection; compare the screened singleton. |
+| slow | From 0.3.x: the menu search of slower with the smaller neighbourhood and coefficient budget. |
 
 [COMPRESSION.md](../../COMPRESSION.md) explains the presets in more detail.
 
@@ -37,7 +38,8 @@ for validation tools.
 
 ## Source map
 
-- `ng_fast.c`, `ng_medium.c`, `ng_slow.c`: retained search policies.
+- `ng_presets.c`: preset table and dispatch. `ng_fast.c`, `ng_split.c`,
+  `ng_medium.c`, `ng_slow.c`: the search policies.
 - `ng_fit.c`, `ng_screen.c`, `ng_search.c`, `ng_select.c`,
   `ng_thresholds.c`: shared fitting, occupancy, scoring and threshold primitives.
 - `ng_predict.c`: directional candidates, including SIMD row implementations.

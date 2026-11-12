@@ -2,74 +2,92 @@
 
 ## Current
 
-Measured 2026-11-11/12. x86 rows on `e7063ab`, Graviton rows on `a12a88e`
-(adds the NEON decode path; x86 code and all encoded frames are unchanged).
+Measured 2026-11-12. **Provisional:** these tables predate two late changes.
+`small` now also encodes the one-option frame and keeps the smaller result, so
+its encode speeds below are about 25% too high, and `medium` and `slow` are
+missing. Tables from the final tree replace them.
 
-**Data:** 77 level-0 128³ uint8 chunks from masked scroll CT volumes:
-63 from PHercParis4 (`20260411134726-2.400um-0.2m-78keV-masked.zarr`) and 14
-from PHerc0841 (`20260319124803-2.403um-0.2m-77keV-masked.zarr`). `slow` and
-`slower` are too slow to encode all of them repeatedly, so they run on every
-fifth chunk (16 chunks); decode speed of `fast` is the same on both sets.
+**Data:** 95 level-0 128³ uint8 chunks from masked scroll CT volumes of five
+scrolls, and 32 chunks from downsampled pyramid levels:
+
+- PHercParis4 `20260411134726-2.400um-0.2m-78keV-masked.zarr` (63 chunks; 12 from level 1, 10 from level 2)
+- PHerc0841 `20260319124803-2.403um-0.2m-77keV-masked.zarr` (14 chunks; 10 from level 1)
+- PHerc1667 `20260323082859-1.129um-0.2m-59keV-masked.zarr` (6 chunks)
+- PHerc0172 `20241024131839-7.910um-53keV-masked.zarr` (5 chunks)
+- PHerc0139 `20250728140407-9.362um-1.2m-113keV-masked.zarr` (7 chunks)
 
 **Method:** one core (`taskset`), each chunk encoded once and round-trip
-checked, then all frames decoded five times; median of three interleaved
-rounds. Timings cover the C API (`vc_compress`/`vc_decompress`) on in-memory
-buffers. AWS machines are `*.2xlarge` on-demand/spot EC2 instances, GCC 12,
-CMake Release builds; the local machine is a laptop with GCC 15.
-Encoded bytes are identical on every machine. The AWS runner is
-`tests/vc-delta3d-bench/speed.yaml` in the ScrollPrize infra repository.
+checked, then all frames decoded in 5 to 15 interleaved rounds; decode speed is
+from the fastest round per chunk, averaged over chunks. Timings cover in-memory
+buffers. AWS machines are `*.2xlarge` on-demand EC2 instances, GCC 12, CMake
+Release builds; the local machine is a laptop with turbo boost off. Encoded
+bytes are identical on every machine. The tool is `benchmark/ladder.c`; the
+AWS boxes are `tests/vc-delta3d-bench/arm-dev.yaml` in the ScrollPrize infra
+repository. Speeds are for the 95 level-0 chunks.
 
 ### Size (% of raw; lower is better)
 
-|Chunks|delta|fast|medium|slow|slower|
-|---|---:|---:|---:|---:|---:|
-|all 77|36.30|26.79|26.78|–|–|
-|subset of 16|36.91|26.83|26.81|26.74|26.48|
+|Data|Chunks|delta|faster|fast|balanced|small|slower|
+|---|---:|---:|---:|---:|---:|---:|---:|
+|PHercParis4 2.4 µm|63|36.78|27.60|27.45|27.37|27.31|27.30|
+|PHerc0841 2.4 µm|14|34.14|23.16|22.91|22.75|22.54|22.63|
+|PHerc1667 1.1 µm|6|22.20|12.02|11.90|11.86|11.65|11.76|
+|PHerc0172 7.9 µm|5|63.33|49.40|49.32|49.23|49.14|49.18|
+|PHerc0139 9.4 µm|7|39.08|26.25|25.88|25.65|24.99|25.53|
+|All level 0|95|37.04|27.01|26.84|26.73|26.60|26.65|
+|PHercParis4 level 1|12|56.93|45.16|45.02|44.92|44.72|44.88|
+|PHercParis4 level 2|10|70.10|59.27|59.20|59.10|58.95|59.06|
+|PHerc0841 level 1|10|56.18|44.84|44.68|44.56|44.07|44.53|
 
-On this data `medium`, `slow` and `slower` gain little over `fast`; the gap is larger on the
-derived volumes in the historical comparison below.
+`faster` is the `fast` preset of 0.3.x. The gain of the smaller presets
+depends on the scan: `small` is 1.1% smaller than `faster` on PHercParis4 and
+4.8% on PHerc0139.
 
 ### Encode (MiB/s, one core; higher is better)
 
-|Machine|delta|fast|medium|slow|slower|
-|---|---:|---:|---:|---:|---:|
-|c5 · Xeon 8275CL (Cascade Lake)|176|42.2|9.6|1.4|1.1|
-|c6i · Xeon 8375C (Ice Lake)|193|53.7|12.7|1.9|1.4|
-|c7i · Xeon 8488C (Sapphire Rapids)|215|62.5|14.5|2.2|1.7|
-|c8i · Xeon 6975P (Granite Rapids)|263|75.1|16.5|2.6|2.0|
-|c6a · EPYC 7R13 (Zen 3)|212|49.0|11.1|1.9|1.4|
-|c7a · EPYC 9R14 (Zen 4)|221|61.2|14.4|2.6|1.9|
-|c6g · Graviton2 (Neoverse N1)|162|24.1|6.3|0.6|0.4|
-|c7g · Graviton3 (Neoverse V1)|234|40.2|10.4|1.2|0.7|
-|c8g · Graviton4 (Neoverse V2)|269|48.7|13.0|1.3|0.8|
-|c9g · Graviton5 (Neoverse V3)|352|61.9|16.2|1.6|1.0|
-|local · Ryzen 7 4800H (Zen 2, AVX2)|227|52.3|12.0|2.0|1.4|
+|Machine|delta|faster|fast|balanced|small|slower|
+|---|---:|---:|---:|---:|---:|---:|
+|c5 · Xeon 8275CL (Cascade Lake)|146|41.4|39.7|29.3|9.5|1.3|
+|c6i · Xeon 8375C (Ice Lake)|179|51.6|49.3|35.6|11.9|1.6|
+|c7i · Xeon 8488C (Sapphire Rapids)|216|65.6|64.3|48.1|15.2|2.1|
+|c8i · Xeon 6975P (Granite Rapids)|254|70.8|71.5|51.9|15.6|2.2|
+|c6a · EPYC 7R13 (Zen 3)|188|47.2|46.4|35.3|12.0|1.6|
+|c7a · EPYC 9R14 (Zen 4)|197|58.8|57.3|44.6|14.7|2.1|
+|c6g · Graviton2 (Neoverse N1)|156|23.4|21.4|12.9|5.4|–|
+|c7g · Graviton3 (Neoverse V1)|222|38.4|36.1|23.2|9.2|0.8|
+|c8g · Graviton4 (Neoverse V2)|258|47.0|43.9|27.3|11.1|0.9|
+|c9g · Graviton5 (Neoverse V3)|338|59.5|55.2|33.6|13.5|1.1|
+|local · Ryzen 7 4800H (Zen 2, AVX2)|173|37.5|37.0|27.6|8.9|1.1|
 
 ### Decode (MiB/s, one core; higher is better)
 
-|Machine|delta|fast|medium|slow|slower|
-|---|---:|---:|---:|---:|---:|
-|c5 · Xeon 8275CL (Cascade Lake)|413|184|141|123|123|
-|c6i · Xeon 8375C (Ice Lake)|444|261|203|175|162|
-|c7i · Xeon 8488C (Sapphire Rapids)|452|281|216|189|183|
-|c8i · Xeon 6975P (Granite Rapids)|575|348|269|231|225|
-|c6a · EPYC 7R13 (Zen 3)|507|197|168|155|142|
-|c7a · EPYC 9R14 (Zen 4)|542|292|240|216|203|
-|c6g · Graviton2 (Neoverse N1)|397|57.0|49.7|45.2|34.9|
-|c7g · Graviton3 (Neoverse V1)|575|92.8|80.4|70.5|57.7|
-|c8g · Graviton4 (Neoverse V2)|701|118|101|87.5|71.8|
-|c9g · Graviton5 (Neoverse V3)|935|147|127|110|89.5|
-|local · Ryzen 7 4800H (Zen 2, AVX2)|530|197|164|149|140|
+|Machine|delta|faster|fast|balanced|small|slower|
+|---|---:|---:|---:|---:|---:|---:|
+|c5 · Xeon 8275CL (Cascade Lake)|339|208|200|194|152|167|
+|c6i · Xeon 8375C (Ice Lake)|421|262|246|234|174|196|
+|c7i · Xeon 8488C (Sapphire Rapids)|477|307|292|280|207|240|
+|c8i · Xeon 6975P (Granite Rapids)|549|344|327|313|227|265|
+|c6a · EPYC 7R13 (Zen 3)|483|204|194|185|168|162|
+|c7a · EPYC 9R14 (Zen 4)|507|290|277|269|220|228|
+|c6g · Graviton2 (Neoverse N1)|387|56.1|51.2|47.3|35.3|–|
+|c7g · Graviton3 (Neoverse V1)|543|91.3|85.1|79.1|59.0|61.2|
+|c8g · Graviton4 (Neoverse V2)|686|118|110|103|75.6|78.6|
+|c9g · Graviton5 (Neoverse V3)|906|147|136|127|96.8|97.7|
+|local · Ryzen 7 4800H (Zen 2, AVX2)|360|139|132|126|109|110|
 
 Notes:
 
-- x86 decoders use AVX2, plus AVX-512 where available. Disabling AVX-512
-  (`ng_set_isa_limit(256)`) makes NG decoding 12–30% slower on Intel and about
-  15% slower on Zen 4; the encoded bytes do not change.
-- ARM decoders use NEON. NG decoding on Graviton is about 2.5–3.5× slower
+- x86 decoders use AVX2, plus AVX-512 where available. Frames with several
+  models (`small`, some `slower` frames) use the AVX2 recurrence on every x86
+  machine, which is why `small` loses more against `fast` on Intel than on
+  Zen 3.
+- Frames with several models decode about twice as slowly with 0.3.x
+  decoders as with this version; the frame format is unchanged.
+- ARM decoders use NEON. NG decoding on Graviton is about 2.5 times slower
   than on comparable x86 machines: NEON vectors are 128 bits wide (AVX2 256,
   AVX-512 512) and there is no gather instruction for the rANS table lookups.
   `delta` is as fast as on x86.
+- Graviton2 did not finish the `slower` run.
 - Single runs on shared cloud machines vary by a few percent.
 
 ## Historical comparison (before the C port)
@@ -77,7 +95,8 @@ Notes:
 Measured before the C port, on a different machine and data set (18
 channel/scale groups including derived volumes). It includes LPC and the
 `tooslow` preset, which 0.3.0 no longer has, and the then-current `NGC1`
-container. Speeds are not comparable with the tables above.
+container. Its `fast` column is the preset now called `faster`. Speeds are not
+comparable with the tables above.
 
 144 identical hash-checked128³ uint8 chunks across18 channel/scale groups. Native codecs, single-core, three load-filtered pinned repetitions. Combined speed is total raw bytes divided by summed median chunk times. Complete frames, not residual-only sizes.
 
