@@ -1,9 +1,9 @@
 # Benchmarks
 
-## 0.3.0
+## Current
 
-Measured 2026-11-11/12 on the 0.3.0 code (`main` at `e7063ab`, identical codec
-to the release).
+Measured 2026-11-11/12. x86 rows on `e7063ab`, Graviton rows on `a12a88e`
+(adds the NEON decode path; x86 code and all encoded frames are unchanged).
 
 **Data:** 77 level-0 128³ uint8 chunks from masked scroll CT volumes:
 63 from PHercParis4 (`20260411134726-2.400um-0.2m-78keV-masked.zarr`) and 14
@@ -39,10 +39,10 @@ derived volumes in the historical comparison below.
 |c8i · Xeon 6975P (Granite Rapids)|263|75.1|16.5|2.6|2.0|
 |c6a · EPYC 7R13 (Zen 3)|212|49.0|11.1|1.9|1.4|
 |c7a · EPYC 9R14 (Zen 4)|221|61.2|14.4|2.6|1.9|
-|c6g · Graviton2 (Neoverse N1)|161|23.8|6.3|0.6|0.4|
-|c7g · Graviton3 (Neoverse V1)|231|39.8|10.3|1.2|0.7|
-|c8g · Graviton4 (Neoverse V2)|268|47.6|12.8|1.3|0.8|
-|c9g · Graviton5 (Neoverse V3)|352|61.7|16.1|1.6|1.0|
+|c6g · Graviton2 (Neoverse N1)|162|24.1|6.3|0.6|0.4|
+|c7g · Graviton3 (Neoverse V1)|234|40.2|10.4|1.2|0.7|
+|c8g · Graviton4 (Neoverse V2)|269|48.7|13.0|1.3|0.8|
+|c9g · Graviton5 (Neoverse V3)|352|61.9|16.2|1.6|1.0|
 |local · Ryzen 7 4800H (Zen 2, AVX2)|227|52.3|12.0|2.0|1.4|
 
 ### Decode (MiB/s, one core; higher is better)
@@ -55,10 +55,10 @@ derived volumes in the historical comparison below.
 |c8i · Xeon 6975P (Granite Rapids)|575|348|269|231|225|
 |c6a · EPYC 7R13 (Zen 3)|507|197|168|155|142|
 |c7a · EPYC 9R14 (Zen 4)|542|292|240|216|203|
-|c6g · Graviton2 (Neoverse N1)|397|30.3|29.5|27.4|23.7|
-|c7g · Graviton3 (Neoverse V1)|575|45.6|44.6|40.8|36.5|
-|c8g · Graviton4 (Neoverse V2)|696|54.1|53.0|48.4|43.7|
-|c9g · Graviton5 (Neoverse V3)|935|66.9|66.4|60.2|54.7|
+|c6g · Graviton2 (Neoverse N1)|397|57.0|49.7|45.2|34.9|
+|c7g · Graviton3 (Neoverse V1)|575|92.8|80.4|70.5|57.7|
+|c8g · Graviton4 (Neoverse V2)|701|118|101|87.5|71.8|
+|c9g · Graviton5 (Neoverse V3)|935|147|127|110|89.5|
 |local · Ryzen 7 4800H (Zen 2, AVX2)|530|197|164|149|140|
 
 Notes:
@@ -66,9 +66,10 @@ Notes:
 - x86 decoders use AVX2, plus AVX-512 where available. Disabling AVX-512
   (`ng_set_isa_limit(256)`) makes NG decoding 12–30% slower on Intel and about
   15% slower on Zen 4; the encoded bytes do not change.
-- On ARM, 0.3.0 has no vector path for the NG reconstruction loop, so NG
-  decoding is 5–6× slower than on comparable x86 machines. `delta` is
-  unaffected.
+- ARM decoders use NEON. NG decoding on Graviton is about 2.5–3.5× slower
+  than on comparable x86 machines: NEON vectors are 128 bits wide (AVX2 256,
+  AVX-512 512) and there is no gather instruction for the rANS table lookups.
+  `delta` is as fast as on x86.
 - Single runs on shared cloud machines vary by a few percent.
 
 ## Historical comparison (before the C port)
@@ -76,7 +77,7 @@ Notes:
 Measured before the C port, on a different machine and data set (18
 channel/scale groups including derived volumes). It includes LPC and the
 `tooslow` preset, which 0.3.0 no longer has, and the then-current `NGC1`
-container. Speeds are not comparable with the 0.3.0 tables above.
+container. Speeds are not comparable with the tables above.
 
 144 identical hash-checked128³ uint8 chunks across18 channel/scale groups. Native codecs, single-core, three load-filtered pinned repetitions. Combined speed is total raw bytes divided by summed median chunk times. Complete frames, not residual-only sizes.
 
