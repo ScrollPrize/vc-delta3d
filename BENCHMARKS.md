@@ -1,4 +1,82 @@
-# Delta3D release comparison
+# Benchmarks
+
+## 0.3.0
+
+Measured 2026-11-11/12 on the 0.3.0 code (`main` at `e7063ab`, identical codec
+to the release).
+
+**Data:** 77 level-0 128³ uint8 chunks from masked scroll CT volumes:
+63 from PHercParis4 (`20260411134726-2.400um-0.2m-78keV-masked.zarr`) and 14
+from PHerc0841 (`20260319124803-2.403um-0.2m-77keV-masked.zarr`). `slow` and
+`slower` are too slow to encode all of them repeatedly, so they run on every
+fifth chunk (16 chunks); decode speed of `fast` is the same on both sets.
+
+**Method:** one core (`taskset`), each chunk encoded once and round-trip
+checked, then all frames decoded five times; median of three interleaved
+rounds. Timings cover the C API (`vc_compress`/`vc_decompress`) on in-memory
+buffers. AWS machines are `*.2xlarge` on-demand/spot EC2 instances, GCC 12,
+CMake Release builds; the local machine is a laptop with GCC 15.
+Encoded bytes are identical on every machine. The AWS runner is
+`tests/vc-delta3d-bench/speed.yaml` in the ScrollPrize infra repository.
+
+### Size (% of raw; lower is better)
+
+|Chunks|delta|fast|medium|slow|slower|
+|---|---:|---:|---:|---:|---:|
+|all 77|36.30|26.79|26.78|–|–|
+|subset of 16|36.91|26.83|26.81|26.74|26.48|
+
+On this data `medium`, `slow` and `slower` gain little over `fast`; the gap is larger on the
+derived volumes in the historical comparison below.
+
+### Encode (MiB/s, one core; higher is better)
+
+|Machine|delta|fast|medium|slow|slower|
+|---|---:|---:|---:|---:|---:|
+|c5 · Xeon 8275CL (Cascade Lake)|176|42.2|9.6|1.4|1.1|
+|c6i · Xeon 8375C (Ice Lake)|193|53.7|12.7|1.9|1.4|
+|c7i · Xeon 8488C (Sapphire Rapids)|215|62.5|14.5|2.2|1.7|
+|c8i · Xeon 6975P (Granite Rapids)|263|75.1|16.5|2.6|2.0|
+|c6a · EPYC 7R13 (Zen 3)|212|49.0|11.1|1.9|1.4|
+|c7a · EPYC 9R14 (Zen 4)|221|61.2|14.4|2.6|1.9|
+|c6g · Graviton2 (Neoverse N1)|161|23.8|6.3|0.6|0.4|
+|c7g · Graviton3 (Neoverse V1)|231|39.8|10.3|1.2|0.7|
+|c8g · Graviton4 (Neoverse V2)|268|47.6|12.8|1.3|0.8|
+|c9g · Graviton5 (Neoverse V3)|352|61.7|16.1|1.6|1.0|
+|local · Ryzen 7 4800H (Zen 2, AVX2)|227|52.3|12.0|2.0|1.4|
+
+### Decode (MiB/s, one core; higher is better)
+
+|Machine|delta|fast|medium|slow|slower|
+|---|---:|---:|---:|---:|---:|
+|c5 · Xeon 8275CL (Cascade Lake)|413|184|141|123|123|
+|c6i · Xeon 8375C (Ice Lake)|444|261|203|175|162|
+|c7i · Xeon 8488C (Sapphire Rapids)|452|281|216|189|183|
+|c8i · Xeon 6975P (Granite Rapids)|575|348|269|231|225|
+|c6a · EPYC 7R13 (Zen 3)|507|197|168|155|142|
+|c7a · EPYC 9R14 (Zen 4)|542|292|240|216|203|
+|c6g · Graviton2 (Neoverse N1)|397|30.3|29.5|27.4|23.7|
+|c7g · Graviton3 (Neoverse V1)|575|45.6|44.6|40.8|36.5|
+|c8g · Graviton4 (Neoverse V2)|696|54.1|53.0|48.4|43.7|
+|c9g · Graviton5 (Neoverse V3)|935|66.9|66.4|60.2|54.7|
+|local · Ryzen 7 4800H (Zen 2, AVX2)|530|197|164|149|140|
+
+Notes:
+
+- x86 decoders use AVX2, plus AVX-512 where available. Disabling AVX-512
+  (`ng_set_isa_limit(256)`) makes NG decoding 12–30% slower on Intel and about
+  15% slower on Zen 4; the encoded bytes do not change.
+- On ARM, 0.3.0 has no vector path for the NG reconstruction loop, so NG
+  decoding is 5–6× slower than on comparable x86 machines. `delta` is
+  unaffected.
+- Single runs on shared cloud machines vary by a few percent.
+
+## Historical comparison (before the C port)
+
+Measured before the C port, on a different machine and data set (18
+channel/scale groups including derived volumes). It includes LPC and the
+`tooslow` preset, which 0.3.0 no longer has, and the then-current `NGC1`
+container. Speeds are not comparable with the 0.3.0 tables above.
 
 144 identical hash-checked128³ uint8 chunks across18 channel/scale groups. Native codecs, single-core, three load-filtered pinned repetitions. Combined speed is total raw bytes divided by summed median chunk times. Complete frames, not residual-only sizes.
 
@@ -6,7 +84,7 @@ New preset names map to the completed five-preset release suite; those measureme
 
 Delta3D/LPC: pinned0.2.0 (LPC includes upstream Delta fallback). Original NG: pinned original control. Blosc1 via numcodecs0.16.5: level5, byte shuffle, automatic internal block size, explicitly one thread; both LZ4 and Zstd backends. Standalone Zstd: level3. Python is orchestration only; compression/decompression is native. Baseline wrappers include output allocation/copy, as in the existing control harness.
 
-## Size (% raw; lower is better)
+### Size (% raw; lower is better)
 
 |Channel|Delta3D|Original NG|LPC|Blosc-LZ4|Blosc-Zstd|Zstd|fast|medium|slow|slower|tooslow|
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -30,7 +108,7 @@ Delta3D/LPC: pinned0.2.0 (LPC includes upstream Delta fallback). Original NG: pi
 |compound/width-L4|45.615|70.849|45.615|71.174|44.827|45.946|38.631|38.278|38.143|38.143|**32.272**|
 |Combined|40.958|61.107|40.002|65.231|44.148|45.918|33.650|32.372|32.132|32.099|**28.665**|
 
-## Encode (MiB/s)
+### Encode (MiB/s)
 
 |Channel|Delta3D|Original NG|LPC|Blosc-LZ4|Blosc-Zstd|Zstd|fast|medium|slow|slower|tooslow|
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -54,7 +132,7 @@ Delta3D/LPC: pinned0.2.0 (LPC includes upstream Delta fallback). Original NG: pi
 |compound/width-L4|443.136|250.488|129.042|**900.043**|60.744|272.928|78.879|13.304|4.751|4.691|2.053|
 |Combined|397.284|243.394|126.608|**981.420**|65.610|310.402|66.009|13.572|4.446|4.085|2.015|
 
-## Decode (MiB/s)
+### Decode (MiB/s)
 
 |Channel|Delta3D|Original NG|LPC|Blosc-LZ4|Blosc-Zstd|Zstd|fast|medium|slow|slower|tooslow|
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -78,7 +156,7 @@ Delta3D/LPC: pinned0.2.0 (LPC includes upstream Delta fallback). Original NG: pi
 |compound/width-L4|729.185|502.355|729.448|**3180.385**|1578.284|1530.256|706.580|530.751|556.631|558.309|78.074|
 |Combined|728.012|484.952|654.227|**3295.207**|1541.155|1432.912|603.192|460.318|463.241|444.221|75.979|
 
-## Repeat spread (aggregate MiB/s)
+### Repeat spread (aggregate MiB/s)
 
 |Preset|Direction|Mean-time|Slowest repeats|Median repeats|Fastest repeats|
 |---|---|---:|---:|---:|---:|
