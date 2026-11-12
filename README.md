@@ -138,6 +138,9 @@ Windows AMD64) and the sdist to [PyPI](https://pypi.org/p/vc-delta3d) via
 2. Create the release from `main` with tag `vX.Y.Z` matching that version,
    e.g. `gh release create v0.3.0 --target main --title v0.3.0 --notes-file notes.md`
    (or *Draft a new release* on GitHub). Note format and decoding
-   compatibility changes in the release notes.
+   compatibility changes in the release notes. `--target` only applies when
+   the tag does not exist yet: if an earlier attempt already created the tag,
+   check that it points at the intended commit
+   (`git ls-remote --tags origin vX.Y.Z`) before publishing.
 3. The *Publish to PyPI* job runs once the build jobs pass; check the Actions run
    and https://pypi.org/p/vc-delta3d.
