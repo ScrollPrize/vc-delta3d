@@ -33,6 +33,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+zarr = [
+    "zarr>=3.2,<4",
+]
 examples = [
     "s3fs>=2024.12.0",
     "zarr>=3.2,<4",
@@ -46,6 +49,9 @@ Issues = "https://github.com/ScrollPrize/vc-delta3d/issues"
 [project.entry-points."numcodecs.codecs"]
 vc-delta3d = "vc_delta3d.numcodecs:Delta3D"
 
+[project.entry-points."zarr.codecs"]
+vc-delta3d = "vc_delta3d.zarr3:Delta3DCodec"
+
 [tool.scikit-build]
 cmake.version = ">=3.22"
 wheel.packages = ["python/vc_delta3d"]
@@ -58,8 +64,8 @@ VC_DELTA3D_INSTALL_CPP = "OFF"
 [tool.cibuildwheel]
 build = "cp{312,313,314}-*"
 skip = "*-musllinux_*"
-test-requires = ["pytest"]
-test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py {project}/tests/test_fallback.py"
+test-requires = ["pytest", "zarr>=3.2,<4"]
+test-command = "pytest -q {project}/tests/test_python.py {project}/tests/test_modern.py {project}/tests/test_indexed.py {project}/tests/test_fallback.py {project}/tests/test_zarr3.py"
 audit-requires = ["twine"]
 audit-command = "twine check {wheel}"
 
