@@ -25,7 +25,7 @@ All selector maps use the unified codec in `selector.c`, including constants.
 They follow the compact rANS model/entropy header and precede voxel residuals.
 There are no historical selector markers, Zstd headers or experimental model
 versions. Only old Delta3D compatibility/fallback is retained. See
-[selector format](../../SELECTOR_FORMAT.md) and [header format](../../HEADER_FORMAT.md).
+[FORMAT.md](../../FORMAT.md) for the frame, header and selector layout.
 
 There is no streaming state, adaptive partition search, tree entropy coder,
 LPC, tooslow, alternative fitting/refinement or user-selectable decoder trial.

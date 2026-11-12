@@ -12,24 +12,16 @@ a thin nanobind adapter; it does not perform prediction or compression in Python
 ## Formats and compatibility
 
 - Lossless uint8 chunks with dimensions divisible by 32 use the preset encoder.
-  Scalar cubes emit **NCF1 directly**, without another envelope.
-- Multiple channels and spatial partitions use the **NGI1** varint index.
-  Repeated subtrees share partition geometry. Leaves use NCF1 coding without
-  redundant leaf magic. Eight full-volume 128³ channels cost 40 index bytes
-  plus 32 leaf-prefix bytes. See `INDEXED_FORMAT.md`.
-- `predictor="delta"` explicitly selects the original Delta3D algorithm and
-  **D3D1** frame. Regular APIs also fall back to this complete legacy path for
-  uint16/int16 data, quantization, or positive dimensions not divisible by 32.
-  Legacy and preset frames are never nested inside each other's containers.
-- Legacy Delta3D scalar/channel decoding and custom legacy magic (such as VCZ1)
-  remain supported. Signed data must remain lossless.
-- LPC, tooslow/HGT3, adaptive/streaming searches and experimental entropy routes
-  are deliberately removed on this branch. Retired formats fail explicitly.
-  The original implementation remains on `feature/ng-presets`.
+  A single cubic chunk is one **NCF1** frame.
+- Multiple channels and spatial partitions use the **NGI1** index around NCF1
+  leaves, so single channels or regions can be read by byte range.
+- `predictor="delta"`, uint16/int16 data, quantization, or dimensions not
+  divisible by 32 use the original Delta3D **D3D1** format. D3D1 data from all
+  earlier releases, including alternate magics such as VCZ1, stays readable.
+- Decoding reads everything from the encoded bytes; Zarr metadata needs no
+  per-chunk fields.
 
-Decoding reads its configuration from the frame, not from the encoder preset.
-[INDEXED_FORMAT.md](INDEXED_FORMAT.md) documents shapes, partitions and independent
-byte-range reads. Zarr metadata needs no additional per-chunk fields.
+[FORMAT.md](FORMAT.md) specifies all three formats and how they relate.
 
 ## C API
 
