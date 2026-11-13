@@ -6,6 +6,9 @@ on:
     branches:
       - main
   workflow_dispatch:
+  release:
+    types:
+      - published
 
 permissions:
   contents: read
@@ -31,3 +34,44 @@ jobs:
 
       - name: Check the packaged crate builds
         run: cargo package
+
+  publish:
+    name: Publish to crates.io
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: test
+    runs-on: ubuntu-24.04
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/vc-delta3d-sys
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # A published version can never be replaced, so stop before uploading
+      # when the release tag and Cargo.toml disagree.
+      - name: Check the tag matches the crate version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::release tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      # Trusted publishing: exchanges the job's OIDC identity for a token
+      # that expires after 30 minutes. No registry secret is stored.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
