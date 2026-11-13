@@ -8,9 +8,13 @@ target_include_directories(vc_delta3d PRIVATE src src/ng)
 if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # ClangCL does not automatically link compiler-rt's CPU detection state
     # used by __builtin_cpu_supports in the SIMD dispatch paths.
-    execute_process(COMMAND "${CMAKE_C_COMPILER}" /clang:--print-runtime-dir
-        OUTPUT_VARIABLE VC_CLANG_RUNTIME_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
+    # Ask clang for the library file itself (--rtlib: the MSVC target defaults to
+    # libgcc): Clang 19 to 21 print a per-target runtime directory that may not
+    # exist, and Visual Studio 2022 ships Clang 19 with compiler-rt in lib/windows.
+    execute_process(COMMAND "${CMAKE_C_COMPILER}" /clang:--rtlib=compiler-rt /clang:--print-libgcc-file-name
+        OUTPUT_VARIABLE VC_CLANG_BUILTINS_FILE OUTPUT_STRIP_TRAILING_WHITESPACE
         COMMAND_ERROR_IS_FATAL ANY)
+    get_filename_component(VC_CLANG_RUNTIME_DIR "${VC_CLANG_BUILTINS_FILE}" DIRECTORY)
     find_library(VC_CLANG_BUILTINS NAMES clang_rt.builtins-x86_64
         PATHS "${VC_CLANG_RUNTIME_DIR}" NO_DEFAULT_PATH REQUIRED)
     target_link_libraries(vc_delta3d PRIVATE "${VC_CLANG_BUILTINS}")
