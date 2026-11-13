@@ -33,7 +33,9 @@ typedef struct {
 vc_encode_options vc_default_options(void);
 /* All functions return 1 on success, 0 on invalid input/allocation failure.
  * Output buffers are caller-owned except vc_compress, whose result must be
- * released with vc_free. No exception crosses this API. */
+ * released with vc_free. No exception crosses this API.
+ * A failed decode may already have written to the output buffer: treat its
+ * contents as undefined unless the call returned 1. */
 int vc_compress(const void*, size_t, const vc_encode_options*, uint8_t**, size_t*);
 void vc_free(void*);
 int vc_frame_inspect(const uint8_t*, size_t, vc_frame_info*);

@@ -1,0 +1,41 @@
+# Rust FFI bindings for the C library. The manifest sits at the repository
+# root so the published crate can carry the C sources it compiles.
+[package]
+name = "vc-delta3d-sys"
+version = "0.3.2"
+edition = "2021"
+rust-version = "1.65"
+description = "Raw FFI bindings to VC-Delta3D, a fast codec for 3-D 8- and 16-bit integer fields (C sources bundled)"
+license = "MIT"
+repository = "https://github.com/ScrollPrize/vc-delta3d"
+readme = "rust/README.md"
+keywords = ["compression", "codec", "volume", "zarr", "ffi"]
+categories = ["external-ffi-bindings", "compression"]
+links = "vc_delta3d"
+build = "rust/build.rs"
+autotests = false
+autoexamples = false
+autobenches = false
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/AUTHORS.md",
+    "/FORMAT.md",
+    "/include/vc_delta3d/*.h",
+    "/src/**/*.c",
+    "/src/**/*.h",
+    "/src/**/*.inc",
+    "/src/ng/LICENSE",
+    "/rust/**",
+]
+
+[lib]
+name = "vc_delta3d_sys"
+path = "rust/src/lib.rs"
+
+[[test]]
+name = "roundtrip"
+path = "rust/tests/roundtrip.rs"
+
+[build-dependencies]
+cc = "1"

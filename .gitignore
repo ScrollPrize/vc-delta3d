@@ -6,3 +6,5 @@ __pycache__/
 *.py[cod]
 /build_py
 *.log
+/target/
+/Cargo.lock
