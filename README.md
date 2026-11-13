@@ -159,6 +159,26 @@ its header dependency. Windows builds use ClangCL because the kernels use VLAs.
 AVX2/AVX-512 are runtime-dispatched; NEON and portable implementations are retained.
 Floating-point contraction remains disabled to preserve fitted weights.
 
+### WebAssembly
+
+The library builds with Emscripten (or any clang targeting WebAssembly). With
+`-msimd128`, which CMake adds under Emscripten (`VC_DELTA3D_WASM_SIMD=ON`), the
+NG kernels run their NEON forms through `src/ng/vcn_wasm_neon.h`, a WebAssembly
+SIMD128 implementation of the NEON intrinsics they use, and encode the same
+bytes as the native builds. The tests run under Node:
+
+```sh
+emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DVC_DELTA3D_MODERN_SMOKE=ON
+cmake --build build-wasm -j
+ctest --test-dir build-wasm --output-on-failure
+```
+
+A kernel that uses a NEON intrinsic missing from `vcn_wasm_neon.h` fails to
+compile there; add the intrinsic with its exact NEON semantics. Modules that
+link the library need a stack of about 1 MiB (`-sSTACK_SIZE=1MB`) and usually
+`-sALLOW_MEMORY_GROWTH=1`. Link the final module at `-O1`: Binaryen's
+`-O2`/`-O3` passes make the decoder about 30% slower in V8.
+
 ## Measurements and development record
 
 [BENCHMARKS.md](BENCHMARKS.md) contains the historical 18-group comparison

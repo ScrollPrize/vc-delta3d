@@ -6,6 +6,8 @@
 
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
 #elif defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
 #endif
@@ -30,6 +32,24 @@ static void prefix_u8(uint8_t* p, size_t x)
         carry = vdupq_laneq_u8(v, 15);
     }
     c = vgetq_lane_u8(carry, 0);
+#elif defined(__wasm_simd128__)
+    /* Byte shifts toward higher lanes, filling with zeros. */
+#define VC_SHL(v, k) wasm_i8x16_shuffle(zero, v, 16 - k, 17 - k, 18 - k, 19 - k, 20 - k, 21 - k, 22 - k, 23 - k, \
+                                        24 - k, 25 - k, 26 - k, 27 - k, 28 - k, 29 - k, 30 - k, 31 - k)
+    const v128_t zero = wasm_i8x16_splat(0);
+    v128_t carry = zero;
+    for (; i + 16 <= x; i += 16) {
+        v128_t v = wasm_v128_load(p + i);
+        v = wasm_i8x16_add(v, VC_SHL(v, 1));
+        v = wasm_i8x16_add(v, VC_SHL(v, 2));
+        v = wasm_i8x16_add(v, VC_SHL(v, 4));
+        v = wasm_i8x16_add(v, VC_SHL(v, 8));
+        v = wasm_i8x16_add(v, carry);
+        wasm_v128_store(p + i, v);
+        carry = wasm_i8x16_shuffle(v, v, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15);
+    }
+#undef VC_SHL
+    c = wasm_u8x16_extract_lane(carry, 0);
 #elif defined(__SSE2__)
     __m128i carry = _mm_setzero_si128();
     for (; i + 16 <= x; i += 16) {

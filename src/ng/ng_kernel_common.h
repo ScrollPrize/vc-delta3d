@@ -98,10 +98,14 @@ static inline int vcn_use_avx2(void) { return 0; }
 
 /* NEON on AArch64 (every AArch64 CPU has it, so there is no run-time check): the mode 6 kernels that have AVX2
  * forms also have NEON forms, which give the plain C integers (the test digest compares the builds).
+ * WebAssembly built with -msimd128 runs the same NEON forms through vcn_wasm_neon.h.
  * -DVCN_NO_NEON or -DVCN_NO_SIMD builds the plain C kernels instead. */
 #if defined(__aarch64__) && defined(__AARCH64EL__) && defined(__ARM_NEON) && (defined(__GNUC__) || defined(__clang__)) && \
     !defined(VCN_NO_NEON) && !defined(VCN_NO_SIMD)
 #include <arm_neon.h>
+#define VCN_HAVE_NEON 1
+#elif defined(__wasm_simd128__) && defined(__clang__) && !defined(VCN_NO_NEON) && !defined(VCN_NO_SIMD)
+#include "vcn_wasm_neon.h"
 #define VCN_HAVE_NEON 1
 #else
 #define VCN_HAVE_NEON 0
