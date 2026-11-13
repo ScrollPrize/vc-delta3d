@@ -34,6 +34,7 @@ uint32_t vc_indexed_header_size(const uint8_t*, size_t);
 /* On success the index owns its leaves. Release with vc_index_free. */
 int vc_index_read(const uint8_t*, size_t, uint64_t object_bytes, vc_chunk_index*);
 void vc_index_free(vc_chunk_index*);
+/* As with vc_decompress, the output is undefined when a decode returns 0. */
 int vc_indexed_leaf_decode(const uint8_t*, size_t, const vc_indexed_leaf*, uint8_t*, size_t);
 int vc_indexed_decode(const uint8_t*, size_t, uint8_t*, size_t);
 #ifdef __cplusplus

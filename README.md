@@ -99,6 +99,17 @@ arrays (as `compressor`). `predictor` names the encoder preset (`delta`,
 0.3.x). It only affects encoding: arrays written with any preset open and
 decode with any setting.
 
+## Rust
+
+The repository root is also the `vc-delta3d-sys` crate: raw FFI bindings to
+the C API above, with the C sources bundled and built by `cc` (no CMake
+needed). See [rust/README.md](rust/README.md).
+
+```toml
+[dependencies]
+vc-delta3d-sys = { git = "https://github.com/ScrollPrize/vc-delta3d" }
+```
+
 ## Zarr v3 and sharding
 
 Install with `pip install 'vc-delta3d[zarr]'`. In Zarr v3, `vc-delta3d` is a
@@ -174,8 +185,8 @@ Publishing a GitHub release uploads wheels (Linux x86_64/aarch64, macOS arm64,
 Windows AMD64) and the sdist to [PyPI](https://pypi.org/p/vc-delta3d) via
 `.github/workflows/release.yml` (trusted publishing, `pypi` environment).
 
-1. Set the version in **both** `pyproject.toml` (`version`) and
-   `CMakeLists.txt` (`project(... VERSION ...)`), merge to `main`, and check
+1. Set the version in `pyproject.toml` (`version`), `CMakeLists.txt`
+   (`project(... VERSION ...)`) and `Cargo.toml` (`version`), merge to `main`, and check
    that the wheel builds on `main` are green.
 2. Create the release from `main` with tag `vX.Y.Z` matching that version,
    e.g. `gh release create v0.3.0 --target main --title v0.3.0 --notes-file notes.md`

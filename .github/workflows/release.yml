@@ -61,6 +61,27 @@ jobs:
           path: wheelhouse/*.whl
           if-no-files-found: error
 
+  rust-crate:
+    name: Test Rust crate on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The runner images ship stable Rust and, on Windows, clang-cl.
+      - name: Test
+        run: cargo test
+
+      - name: Check the packaged crate builds
+        run: cargo package
+
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-24.04
