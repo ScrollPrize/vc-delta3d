@@ -53,6 +53,8 @@ jobs:
           CIBW_ARCHS: ${{ matrix.arch }}
         with:
           output-dir: wheelhouse
+          # pyproject.toml selects the build[uv] frontend.
+          extras: uv
 
       - name: Upload wheels
         uses: actions/upload-artifact@v6

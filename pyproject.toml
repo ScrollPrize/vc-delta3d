@@ -64,6 +64,9 @@ VC_DELTA3D_INSTALL_CPP = "OFF"
 [tool.cibuildwheel]
 build = "cp{312,313,314}-*"
 skip = "*-musllinux_*"
+# uv creates the build and test environments much faster than pip, which
+# matters most on Windows. The release workflow installs it (extras: uv).
+build-frontend = "build[uv]"
 # No < or > here: on Windows cibuildwheel runs this through cmd.exe, which
 # reads them as redirections. ~=3.1 means >=3.1,<4.
 test-requires = ["pytest", "zarr~=3.1"]
