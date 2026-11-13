@@ -203,7 +203,10 @@ are in git history (commit 93469eb).
 
 Publishing a GitHub release uploads wheels (Linux x86_64/aarch64, macOS arm64,
 Windows AMD64) and the sdist to [PyPI](https://pypi.org/p/vc-delta3d) via
-`.github/workflows/release.yml` (trusted publishing, `pypi` environment).
+`.github/workflows/release.yml` (trusted publishing, `pypi` environment), and
+the `vc-delta3d-sys` crate to [crates.io](https://crates.io/crates/vc-delta3d-sys)
+via `.github/workflows/rust.yml` (trusted publishing, `crates-io` environment).
+The two publish independently: if one fails, re-run that workflow.
 
 1. Set the version in `pyproject.toml` (`version`), `CMakeLists.txt`
    (`project(... VERSION ...)`) and `Cargo.toml` (`version`), merge to `main`, and check
@@ -215,5 +218,7 @@ Windows AMD64) and the sdist to [PyPI](https://pypi.org/p/vc-delta3d) via
    the tag does not exist yet: if an earlier attempt already created the tag,
    check that it points at the intended commit
    (`git ls-remote --tags origin vX.Y.Z`) before publishing.
-3. The *Publish to PyPI* job runs once the build jobs pass; check the Actions run
-   and https://pypi.org/p/vc-delta3d.
+3. The *Publish to PyPI* and *Publish to crates.io* jobs run once their build
+   and test jobs pass; check the Actions runs, https://pypi.org/p/vc-delta3d
+   and https://crates.io/crates/vc-delta3d-sys. The crates.io job refuses to
+   publish when the tag is not `v` plus the `Cargo.toml` version.
