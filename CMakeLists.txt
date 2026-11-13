@@ -13,6 +13,21 @@ if(VC_DELTA3D_BUILD_PYTHON OR VC_DELTA3D_BUILD_TESTS OR VC_DELTA3D_MODERN_SMOKE)
     enable_language(CXX)
 endif()
 
+if(EMSCRIPTEN)
+    # WebAssembly SIMD128 runs the NEON forms of the NG kernels
+    # (src/ng/vcn_wasm_neon.h); every current browser and Node supports it.
+    option(VC_DELTA3D_WASM_SIMD "Build the WebAssembly SIMD128 kernels" ON)
+    if(VC_DELTA3D_WASM_SIMD)
+        add_compile_options(-msimd128)
+    endif()
+    # The tests run under Node; the codec needs more than Emscripten's 64 KiB
+    # default stack and grows the heap for large chunks.
+    add_link_options(-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1MB)
+    # The C++ API and its tests use exceptions, which Emscripten does not
+    # catch by default.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fexceptions>)
+    add_link_options($<$<LINK_LANGUAGE:CXX>:-fexceptions>)
+endif()
 add_library(vc_delta3d STATIC)
 option(VC_DELTA3D_BUILD_NG "Build modern NG/Delta presets" ON)
 if(VC_DELTA3D_BUILD_NG)
