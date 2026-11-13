@@ -95,19 +95,43 @@ fn main() {
 
 /// clang-cl does not link compiler-rt's CPU detection state, which
 /// `__builtin_cpu_supports` in the SIMD dispatch needs.
+///
+/// The builtins library is `lib/windows/clang_rt.builtins-<arch>.lib` in the
+/// LLVM bundled with Visual Studio and `lib/<triple>/clang_rt.builtins.lib`
+/// in LLVM's own installers, so look through every directory below the
+/// resource directory's `lib`.
 fn link_clang_builtins(build: &cc::Build) {
     let compiler = build.get_compiler();
-    let dir = Command::new(compiler.path())
-        .arg("/clang:--print-runtime-dir")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let Some(dir) = dir else {
-        println!("cargo:warning=vc-delta3d-sys: could not locate the clang runtime directory");
-        return;
+    let query = |flag: &str| {
+        Command::new(compiler.path())
+            .arg(format!("/clang:{flag}"))
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
     };
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    println!("cargo:rustc-link-search=native={dir}");
-    println!("cargo:rustc-link-lib=static=clang_rt.builtins-{arch}");
+    let mut dirs: Vec<PathBuf> = query("--print-runtime-dir").into_iter().collect();
+    if let Some(lib) = query("-print-resource-dir").map(|d| d.join("lib")) {
+        let subdirs = fs::read_dir(&lib).into_iter().flatten().flatten().map(|e| e.path());
+        dirs.extend(subdirs.filter(|d| d.is_dir()));
+    }
+    for dir in &dirs {
+        let per_target = dir.file_name().map_or(false, |n| n.to_string_lossy().starts_with(&arch));
+        let mut names = vec![format!("clang_rt.builtins-{arch}")];
+        if per_target {
+            names.push("clang_rt.builtins".to_owned());
+        }
+        for name in names {
+            if dir.join(format!("{name}.lib")).is_file() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+                println!("cargo:rustc-link-lib=static={name}");
+                return;
+            }
+        }
+    }
+    println!(
+        "cargo:warning=vc-delta3d-sys: clang_rt.builtins not found for {} (searched {dirs:?}); linking may fail",
+        compiler.path().display()
+    );
 }
